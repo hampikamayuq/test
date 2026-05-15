@@ -1,0 +1,5 @@
+[
+  {"lead_id": 101, "text": "Cliente: quero saber o preço para contratar hoje", "created_at": "2026-05-14T12:00:00Z", "direction": "incoming"},
+  {"lead_id": 101, "text": "Vendedor: posso enviar uma proposta agora", "created_at": "2026-05-14T12:15:00Z", "direction": "outgoing"},
+  {"lead_id": 102, "text": "Cliente: achei caro, tem desconto?", "created_at": "2026-05-14T13:00:00Z", "direction": "incoming"}
+]
