@@ -1,0 +1,4 @@
+[
+  {"id": 101, "name": "Maria Silva", "status_id": 2001, "pipeline_id": 3001, "price": 1200, "created_at": "2026-05-14T10:00:00Z"},
+  {"id": 102, "name": "João Pereira", "status_id": 2002, "pipeline_id": 3001, "price": 0, "created_at": "2026-05-14T11:00:00Z"}
+]
