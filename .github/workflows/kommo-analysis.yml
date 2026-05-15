@@ -17,6 +17,7 @@ jobs:
     env:
       KOMMO_SUBDOMAIN: ${{ secrets.KOMMO_SUBDOMAIN }}
       KOMMO_ACCESS_TOKEN: ${{ secrets.KOMMO_ACCESS_TOKEN }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
@@ -45,6 +46,8 @@ jobs:
         run: |
           python kommo_lead_analyzer.py \
             --from-api \
+            --stale-hours 48 \
+            --top-n 30 \
             --output kommo_analysis.md
 
       - name: Upload report artifact

@@ -47,6 +47,12 @@ TEXT_KEYS = ("text", "message", "body", "comment", "note", "content", "value")
 TIME_KEYS = ("created_at", "updated_at", "date", "timestamp", "createdAt", "time")
 LEAD_ID_KEYS = ("lead_id", "entity_id", "parent_id", "id_lead", "leadId")
 
+# Kommo note_type integers → direction
+# 4 = incoming call, 10 = outgoing call, 25 = incoming SMS, 26 = outgoing SMS,
+# 102 = incoming message, 103 = outgoing message
+_NOTE_TYPE_INCOMING = {4, 25, 102}
+_NOTE_TYPE_OUTGOING = {10, 26, 103}
+
 
 @dataclass
 class Message:
@@ -172,7 +178,20 @@ def extract_messages(rows: Iterable[dict[str, Any]]) -> list[Message]:
 
 
 def infer_direction(row: dict[str, Any], text: str) -> str:
-    direction = str(first_present(row, ("direction", "sender_type", "type", "note_type")) or "").lower()
+    # Kommo note_type integer takes priority when available.
+    params = row.get("params") if isinstance(row.get("params"), dict) else {}
+    note_type_raw = row.get("note_type") or params.get("note_type")
+    if note_type_raw is not None:
+        try:
+            note_type = int(note_type_raw)
+            if note_type in _NOTE_TYPE_INCOMING:
+                return "incoming"
+            if note_type in _NOTE_TYPE_OUTGOING:
+                return "outgoing"
+        except (ValueError, TypeError):
+            pass
+
+    direction = str(first_present(row, ("direction", "sender_type", "type")) or "").lower()
     if any(token in direction for token in ("incoming", "inbound", "client", "customer", "received")):
         return "incoming"
     if any(token in direction for token in ("outgoing", "outbound", "manager", "user", "sent")):
@@ -226,6 +245,9 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
                     response_times.append(message.created_at - pending_incoming.created_at)
                     pending_incoming = None
 
+        last_ts = last_message.created_at if last_message else None
+        unanswered_hours: float | None = round((now - last_ts) / 3600, 1) if unanswered and last_ts else None
+
         lead_reports.append(
             {
                 "lead_id": lead.id,
@@ -240,15 +262,21 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
                 "negative_signals": negative,
                 "last_direction": last_message.direction if last_message else None,
                 "unanswered": unanswered,
+                "unanswered_hours": unanswered_hours,
                 "stale_unanswered": stale,
                 "priority_score": score,
                 "recommendation": recommend(score, unanswered, stale, objections),
             }
         )
 
-    lead_reports.sort(key=lambda item: (item["priority_score"], item["unanswered"], item["messages"]), reverse=True)
+    # Sort: stale first, then unanswered, then by score descending.
+    lead_reports.sort(
+        key=lambda item: (item["stale_unanswered"], item["unanswered"], item["priority_score"], item["messages"]),
+        reverse=True,
+    )
     avg_response = sum(response_times) / len(response_times) if response_times else None
     return {
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "summary": {
             "total_leads": len(leads),
             "total_messages": len(messages),
@@ -276,26 +304,45 @@ def recommend(score: int, unanswered: bool, stale: bool, objections: int) -> str
     return "Nutrir com follow-up e conteúdo relevante."
 
 
-def render_markdown(report: dict[str, Any]) -> str:
+def render_markdown(report: dict[str, Any], top_n: int = 20) -> str:
     summary = report["summary"]
-    lines = [
-        "# Análise de Leads e Mensagens Kommo",
-        "",
+    generated = report.get("generated_at", "")
+    lines = ["# Análise de Leads e Mensagens Kommo", ""]
+    if generated:
+        lines += [f"_Gerado em {generated}_", ""]
+    lines += [
         f"- Leads analisados: **{summary['total_leads']}**",
         f"- Mensagens analisadas: **{summary['total_messages']}**",
         f"- Leads sem resposta: **{summary['unanswered_leads']}**",
         f"- Leads sem resposta vencidos: **{summary['stale_unanswered_leads']}**",
         f"- Tempo médio de resposta: **{format_seconds(summary['average_response_seconds'])}**",
         "",
+    ]
+
+    pipelines = summary.get("pipelines", {})
+    if pipelines and not (len(pipelines) == 1 and "unknown" in pipelines):
+        lines += ["## Leads por pipeline", ""]
+        lines += [f"- `{pid}`: {count}" for pid, count in sorted(pipelines.items(), key=lambda x: -x[1])]
+        lines += [""]
+
+    lines += [
         "## Top prioridades",
         "",
-        "| Score | Lead | Mensagens | Sem resposta | Recomendação |",
+        "| Score | Lead | Msgs | Sem resposta | Recomendação |",
         "| ---: | --- | ---: | --- | --- |",
     ]
-    for lead in report["leads"][:20]:
+    for lead in report["leads"][:top_n]:
+        if lead["stale_unanswered"] and lead["unanswered_hours"]:
+            unanswered_label = f"sim ({lead['unanswered_hours']}h) ⚠️"
+        elif lead["unanswered"] and lead["unanswered_hours"]:
+            unanswered_label = f"sim ({lead['unanswered_hours']}h)"
+        elif lead["unanswered"]:
+            unanswered_label = "sim"
+        else:
+            unanswered_label = "não"
         lines.append(
             f"| {lead['priority_score']} | {lead['name'] or lead['lead_id']} | {lead['messages']} | "
-            f"{'sim' if lead['unanswered'] else 'não'} | {lead['recommendation']} |"
+            f"{unanswered_label} | {lead['recommendation']} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -312,58 +359,151 @@ def format_seconds(seconds: float | None) -> str:
 
 def write_csv(report: dict[str, Any], path: str) -> None:
     rows = report["leads"]
-    fieldnames = list(rows[0].keys()) if rows else ["lead_id", "priority_score", "recommendation"]
+    if not rows:
+        fieldnames = ["lead_id", "name", "priority_score", "recommendation"]
+    else:
+        fieldnames = list(rows[0].keys())
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def fetch_kommo_collection(subdomain: str, token: str, path: str, limit: int = 250) -> list[dict[str, Any]]:
-    url = f"https://{subdomain}.kommo.com/api/v4/{path.lstrip('/')}"
-    separator = "&" if "?" in url else "?"
-    url = f"{url}{separator}limit={limit}"
-    rows: list[dict[str, Any]] = []
-    while url:
-        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+def _api_request(url: str, token: str, timeout: int = 30, max_retries: int = 4) -> bytes:
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    request = urllib.request.Request(url, headers=headers)
+    last_exc: Exception = RuntimeError("unknown error")
+    for attempt in range(max_retries + 1):
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
         except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code == 429 or exc.code >= 500:
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
             details = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Kommo API returned HTTP {exc.code}: {details}") from exc
+        except urllib.error.URLError as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(f"Network error reaching Kommo API: {exc.reason}") from exc
+    raise RuntimeError(f"Max retries exceeded: {last_exc}") from last_exc
+
+
+def fetch_kommo_collection(
+    subdomain: str,
+    token: str,
+    path: str,
+    limit: int = 250,
+    filter_from: int | None = None,
+    filter_to: int | None = None,
+) -> list[dict[str, Any]]:
+    base = f"https://{subdomain}.kommo.com/api/v4/{path.lstrip('/')}"
+    params: dict[str, str] = {"limit": str(limit)}
+    if filter_from is not None:
+        params["filter[created_at][from]"] = str(filter_from)
+    if filter_to is not None:
+        params["filter[created_at][to]"] = str(filter_to)
+    url = f"{base}?{urllib.parse.urlencode(params)}"
+    rows: list[dict[str, Any]] = []
+    while url:
+        payload = json.loads(_api_request(url, token).decode("utf-8"))
         embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         for value in embedded.values():
             if isinstance(value, list):
                 rows.extend(item for item in value if isinstance(item, dict))
                 break
-        next_link = payload.get("_links", {}).get("next", {}).get("href") if isinstance(payload, dict) else None
-        url = urllib.parse.urljoin(url, next_link) if next_link else ""
+        next_href = payload.get("_links", {}).get("next", {}).get("href") if isinstance(payload, dict) else None
+        url = str(urllib.parse.urljoin(url, next_href)) if next_href else ""
     return rows
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analisa mensagens/notas e leads do Kommo para priorizar follow-up comercial.")
+    parser = argparse.ArgumentParser(
+        description="Analisa mensagens/notas e leads do Kommo para priorizar follow-up comercial."
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--leads-file", help="Arquivo JSON/CSV com leads exportados do Kommo.")
-    source.add_argument("--from-api", action="store_true", help="Busca leads e notas pela API usando KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN.")
-    parser.add_argument("--messages-file", help="Arquivo JSON/CSV com mensagens ou notas. Obrigatório com --leads-file.")
+    source.add_argument(
+        "--from-api",
+        action="store_true",
+        help="Busca leads e notas pela API usando KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN.",
+    )
+    parser.add_argument(
+        "--messages-file",
+        help="Arquivo JSON/CSV com mensagens ou notas. Obrigatório com --leads-file.",
+    )
     parser.add_argument("--output", default="kommo_analysis.md", help="Caminho do relatório de saída.")
-    parser.add_argument("--format", choices=("markdown", "json", "csv"), default="markdown", help="Formato do relatório.")
-    parser.add_argument("--stale-hours", type=int, default=24, help="Horas para considerar um lead sem resposta como vencido.")
+    parser.add_argument(
+        "--format",
+        choices=("markdown", "json", "csv"),
+        default="markdown",
+        help="Formato do relatório.",
+    )
+    parser.add_argument(
+        "--stale-hours",
+        type=int,
+        default=24,
+        help="Horas para considerar um lead sem resposta como vencido (padrão: 24).",
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=20,
+        help="Quantidade de leads exibidos no relatório Markdown (padrão: 20).",
+    )
+    parser.add_argument(
+        "--filter-from",
+        help="Filtrar leads criados a partir desta data ISO 8601 (ex: 2026-01-01). Apenas com --from-api.",
+    )
+    parser.add_argument(
+        "--filter-to",
+        help="Filtrar leads criados até esta data ISO 8601 (ex: 2026-12-31). Apenas com --from-api.",
+    )
     return parser
+
+
+def _parse_date_to_timestamp(value: str) -> int:
+    try:
+        return int(dt.datetime.fromisoformat(value).timestamp())
+    except ValueError:
+        raise ValueError(f"Data inválida: {value!r}. Use formato ISO 8601 (ex: 2026-01-01).")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    filter_from: int | None = None
+    filter_to: int | None = None
+    if args.filter_from or args.filter_to:
+        if not args.from_api:
+            print("--filter-from/--filter-to são suportados apenas com --from-api.", file=sys.stderr)
+            return 2
+        try:
+            if args.filter_from:
+                filter_from = _parse_date_to_timestamp(args.filter_from)
+            if args.filter_to:
+                filter_to = _parse_date_to_timestamp(args.filter_to)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
     if args.from_api:
         subdomain = os.getenv("KOMMO_SUBDOMAIN", "").strip().removesuffix(".kommo.com")
         token = os.getenv("KOMMO_ACCESS_TOKEN", "").strip()
         if not subdomain or not token:
             print("Defina KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN para usar --from-api.", file=sys.stderr)
             return 2
-        leads = extract_leads(fetch_kommo_collection(subdomain, token, "leads"))
-        messages = extract_messages(fetch_kommo_collection(subdomain, token, "leads/notes"))
+        leads = extract_leads(
+            fetch_kommo_collection(subdomain, token, "leads", filter_from=filter_from, filter_to=filter_to)
+        )
+        messages = extract_messages(
+            fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
+        )
     else:
         if not args.messages_file:
             print("--messages-file é obrigatório quando --leads-file é usado.", file=sys.stderr)
@@ -380,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
         write_csv(report, args.output)
     else:
         with open(args.output, "w", encoding="utf-8") as handle:
-            handle.write(render_markdown(report))
+            handle.write(render_markdown(report, top_n=args.top_n))
     print(f"Relatório salvo em {args.output}")
     return 0
 
