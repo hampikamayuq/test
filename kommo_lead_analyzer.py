@@ -292,7 +292,11 @@ def infer_direction(row: dict[str, Any], text: str) -> str:
             if note_type in _NOTE_TYPE_OUTGOING:
                 return "outgoing"
         except (ValueError, TypeError):
-            pass
+            nt_str = str(note_type_raw).lower()
+            if nt_str in ("chat_in", "sms_in", "call_in"):
+                return "incoming"
+            if nt_str in ("chat_out", "sms_out", "call_out"):
+                return "outgoing"
 
     direction = str(first_present(row, ("direction", "sender_type", "type")) or "").lower()
     if any(token in direction for token in ("incoming", "inbound", "client", "customer", "received")):
@@ -1096,6 +1100,88 @@ def fetch_overdue_task_lead_ids(subdomain: str, token: str) -> set[str]:
     return lead_ids
 
 
+def fetch_talks_messages(
+    subdomain: str,
+    token: str,
+    filter_from: int | None = None,
+    filter_to: int | None = None,
+    max_talks: int = 3000,
+) -> list[Message]:
+    """Fetch WhatsApp/chat messages from Kommo Talks (Conversations) API.
+
+    Kommo stores WhatsApp Business and chatbot messages in /api/v4/talks,
+    separate from /api/v4/leads/notes. This function fetches them and converts
+    to Message objects so the analyzer can read conversation content.
+    """
+    try:
+        talks = fetch_kommo_collection(
+            subdomain, token, "talks",
+            filter_from=filter_from, filter_to=filter_to,
+        )
+    except RuntimeError:
+        return []
+
+    if len(talks) > max_talks:
+        talks = talks[:max_talks]
+
+    messages: list[Message] = []
+    base_url = "https://" + subdomain + ".kommo.com/api/v4/talks/"
+
+    for talk in talks:
+        talk_id = str(talk.get("id") or "").strip()
+        lead_id = str(talk.get("entity_id") or "").strip()
+        entity_type = str(talk.get("entity_type") or "").lower()
+        if not talk_id or not lead_id:
+            continue
+        if entity_type and entity_type not in ("leads", "lead"):
+            continue
+
+        try:
+            raw = _api_request(base_url + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
+        except RuntimeError:
+            continue
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
+        msg_list = embedded.get("messages", []) if isinstance(embedded, dict) else []
+
+        for msg in msg_list:
+            if not isinstance(msg, dict):
+                continue
+            text = normalize_text(msg.get("text") or msg.get("content") or "")
+            if not text:
+                continue
+            created_at = parse_timestamp(msg.get("created_at") or msg.get("timestamp"))
+
+            from_field = msg.get("from", {})
+            if isinstance(from_field, dict):
+                from_type = str(from_field.get("type", "")).lower()
+            else:
+                from_type = str(from_field or "").lower()
+
+            if from_type in ("client", "customer", "contact"):
+                direction = "incoming"
+            elif from_type in ("user", "bot", "amo_bot", "manager", "amo"):
+                direction = "outgoing"
+            else:
+                direction = "unknown"
+
+            messages.append(Message(
+                lead_id=lead_id,
+                text=text,
+                created_at=created_at,
+                direction=direction,
+                raw=msg,
+            ))
+
+    return messages
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1187,6 +1273,11 @@ def main(argv: list[str] | None = None) -> int:
         messages = extract_messages(
             fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
         )
+        # WhatsApp/chatbot messages live in the Talks (Conversations) API, not in notes.
+        # Merge them so the analyzer has full conversation content.
+        talks_messages = fetch_talks_messages(subdomain, token, filter_from=filter_from, filter_to=filter_to)
+        messages.extend(talks_messages)
+        print(f"Mensagens carregadas: {len(messages) - len(talks_messages)} notas + {len(talks_messages)} mensagens de conversa")
         name_map = fetch_pipeline_names(subdomain, token)
         overdue_task_lead_ids = fetch_overdue_task_lead_ids(subdomain, token)
     else:
