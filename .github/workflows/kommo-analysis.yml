@@ -1,0 +1,54 @@
+name: Kommo Lead Analysis
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs every day at 12:00 UTC. Adjust if you need another timezone.
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze Kommo leads
+    runs-on: ubuntu-latest
+
+    env:
+      KOMMO_SUBDOMAIN: ${{ secrets.KOMMO_SUBDOMAIN }}
+      KOMMO_ACCESS_TOKEN: ${{ secrets.KOMMO_ACCESS_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "$KOMMO_SUBDOMAIN" ]; then
+            echo "Missing KOMMO_SUBDOMAIN secret" >&2
+            exit 1
+          fi
+          if [ -z "$KOMMO_ACCESS_TOKEN" ]; then
+            echo "Missing KOMMO_ACCESS_TOKEN secret" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Run Kommo analysis
+        run: |
+          python kommo_lead_analyzer.py \
+            --from-api \
+            --output kommo_analysis.md
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kommo-analysis-report
+          path: kommo_analysis.md

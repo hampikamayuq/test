@@ -39,6 +39,20 @@ export KOMMO_ACCESS_TOKEN="seu-token-oauth"
 python3 kommo_lead_analyzer.py --from-api --output kommo_analysis.md
 ```
 
+
+## Rodar automaticamente com GitHub Actions
+
+O repositório inclui o workflow `.github/workflows/kommo-analysis.yml` para rodar a análise pela API do Kommo manualmente ou todos os dias às 12:00 UTC.
+
+Antes de executar, configure estes secrets no GitHub em **Settings → Secrets and variables → Actions**:
+
+- `KOMMO_SUBDOMAIN`: apenas o subdomínio da conta, sem `https://` e sem `.kommo.com`.
+- `KOMMO_ACCESS_TOKEN`: token de acesso novo/ativo da integração Kommo.
+
+Depois, abra a aba **Actions**, selecione **Kommo Lead Analysis** e clique em **Run workflow**. Ao terminar, baixe o artifact `kommo-analysis-report`, que contém o arquivo `kommo_analysis.md`.
+
+> Segurança: não coloque tokens no código, no README, em exemplos ou em commits. Se um token foi compartilhado em chat ou commit, revogue no Kommo e gere outro antes de salvar nos secrets do GitHub.
+
 ## Campos aceitos
 
 A ferramenta tenta reconhecer nomes comuns de campos para facilitar o uso com exports diferentes:
