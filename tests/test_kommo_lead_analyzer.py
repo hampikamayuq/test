@@ -11,15 +11,22 @@ sys.path.insert(0, str(ROOT))
 
 from kommo_lead_analyzer import (
     analyze,
+    compute_first_response_seconds,
     detect_bot_stage,
     detect_city,
+    detect_payment_type,
+    detect_return_patient,
     detect_source,
     detect_specialty,
     extract_leads,
     extract_messages,
+    format_seconds,
     infer_direction,
+    load_delta_snapshot,
     parse_timestamp,
+    render_html,
     render_markdown,
+    save_delta_snapshot,
     write_csv,
     Message,
 )
@@ -180,6 +187,78 @@ class DetectBotStageTest(unittest.TestCase):
         self.assertEqual(detect_bot_stage(msgs), 5)
 
 
+class DetectPaymentTypeTest(unittest.TestCase):
+    def test_convenio(self):
+        msgs = _make_messages([("aceito convênio Unimed?", "incoming")])
+        self.assertEqual(detect_payment_type(msgs), "convenio")
+
+    def test_particular(self):
+        msgs = _make_messages([("consulta particular, como pago?", "incoming")])
+        self.assertEqual(detect_payment_type(msgs), "particular")
+
+    def test_none_when_not_mentioned(self):
+        msgs = _make_messages([("gostaria de agendar", "incoming")])
+        self.assertIsNone(detect_payment_type(msgs))
+
+    def test_only_checks_incoming(self):
+        msgs = _make_messages([
+            ("consulta particular disponível", "outgoing"),
+            ("quero agendar", "incoming"),
+        ])
+        self.assertIsNone(detect_payment_type(msgs))
+
+
+class DetectReturnPatientTest(unittest.TestCase):
+    def test_return_patient(self):
+        msgs = _make_messages([("já sou paciente e gostaria de remarcar", "incoming")])
+        self.assertTrue(detect_return_patient(msgs))
+
+    def test_retorno_keyword(self):
+        msgs = _make_messages([("quero agendar retorno com Dr. Ceccarelli", "incoming")])
+        self.assertTrue(detect_return_patient(msgs))
+
+    def test_new_patient(self):
+        msgs = _make_messages([("nunca fui a clinica, gostaria de agendar", "incoming")])
+        self.assertFalse(detect_return_patient(msgs))
+
+    def test_only_checks_incoming(self):
+        msgs = _make_messages([
+            ("paciente antiga voltou ao sistema", "outgoing"),
+            ("gostaria de agendar", "incoming"),
+        ])
+        self.assertFalse(detect_return_patient(msgs))
+
+
+class ComputeFirstResponseTest(unittest.TestCase):
+    def test_basic_first_response(self):
+        msgs = _make_messages([
+            ("oi", "incoming"),
+            ("olá, como posso ajudar?", "outgoing"),
+        ])
+        msgs[0].created_at = 1_700_000_000
+        msgs[1].created_at = 1_700_000_120
+        self.assertEqual(compute_first_response_seconds(msgs), 120)
+
+    def test_no_outgoing_returns_none(self):
+        msgs = _make_messages([("oi", "incoming")])
+        msgs[0].created_at = 1_700_000_000
+        self.assertIsNone(compute_first_response_seconds(msgs))
+
+    def test_no_incoming_returns_none(self):
+        msgs = _make_messages([("olá", "outgoing")])
+        msgs[0].created_at = 1_700_000_000
+        self.assertIsNone(compute_first_response_seconds(msgs))
+
+    def test_ignores_second_incoming_pair(self):
+        msgs = [
+            Message(lead_id="1", text="oi", direction="incoming", created_at=1_700_000_000),
+            Message(lead_id="1", text="olá", direction="outgoing", created_at=1_700_000_060),
+            Message(lead_id="1", text="outra dúvida", direction="incoming", created_at=1_700_000_200),
+            Message(lead_id="1", text="claro", direction="outgoing", created_at=1_700_000_500),
+        ]
+        self.assertEqual(compute_first_response_seconds(msgs), 60)
+
+
 # ---------------------------------------------------------------------------
 # analyze()
 # ---------------------------------------------------------------------------
@@ -253,6 +332,68 @@ class AnalyzeTest(unittest.TestCase):
         self.assertIn("specialties", report["summary"])
         self.assertIn("instagram", report["summary"]["sources"])
 
+    def test_payment_type_in_lead_report(self):
+        leads = extract_leads([{"id": 1}])
+        messages = extract_messages([
+            {"lead_id": 1, "text": "aceito plano Unimed?", "direction": "incoming"},
+        ])
+        report = analyze(leads, messages)
+        self.assertEqual(report["leads"][0]["payment_type"], "convenio")
+
+    def test_return_patient_in_lead_report(self):
+        leads = extract_leads([{"id": 1}])
+        messages = extract_messages([
+            {"lead_id": 1, "text": "já sou paciente e gostaria de remarcar consulta", "direction": "incoming"},
+        ])
+        report = analyze(leads, messages)
+        self.assertTrue(report["leads"][0]["return_patient"])
+        self.assertGreater(report["summary"]["return_patients"], 0)
+
+    def test_first_response_in_summary(self):
+        leads = extract_leads([{"id": 1}])
+        messages = extract_messages([
+            {"lead_id": 1, "text": "oi", "direction": "incoming", "created_at": 1_700_000_000},
+            {"lead_id": 1, "text": "olá", "direction": "outgoing", "created_at": 1_700_000_300},
+        ])
+        report = analyze(leads, messages)
+        self.assertEqual(report["summary"]["average_first_response_seconds"], 300.0)
+
+    def test_overdue_task_leads_sorted_first(self):
+        recent_ts = int(time.time()) - 1800
+        leads = extract_leads([{"id": "A"}, {"id": "B"}])
+        messages = extract_messages([
+            {"lead_id": "A", "text": "oi", "direction": "outgoing", "created_at": recent_ts},
+            {"lead_id": "B", "text": "oi", "direction": "outgoing", "created_at": recent_ts},
+        ])
+        report = analyze(leads, messages, overdue_task_leads={"A"})
+        self.assertTrue(report["leads"][0]["has_overdue_task"])
+        self.assertEqual(report["leads"][0]["lead_id"], "A")
+
+    def test_name_map_applied(self):
+        leads = extract_leads([{"id": 1, "status_id": 42, "pipeline_id": 7}])
+        messages = extract_messages([{"lead_id": 1, "text": "oi", "direction": "incoming"}])
+        report = analyze(leads, messages, name_map={"42": "Novo", "7": "Principal"})
+        lead = report["leads"][0]
+        self.assertEqual(lead["status_name"], "Novo")
+        self.assertEqual(lead["pipeline_name"], "Principal")
+
+    def test_delta_bot_stage(self):
+        leads = extract_leads([{"id": "1"}])
+        messages = extract_messages([
+            {"lead_id": "1", "text": "Seja bem-vindo à Clinica QARA!", "direction": "outgoing"},
+        ])
+        prev_snapshot = {"1": {"bot_stage": 0, "unanswered": False, "priority_score": 20}}
+        report = analyze(leads, messages, prev_snapshot=prev_snapshot)
+        self.assertEqual(report["leads"][0]["delta_bot_stage"], 1)
+
+    def test_leads_by_hour_and_weekday(self):
+        leads = extract_leads([{"id": 1, "created_at": "2026-05-14T10:00:00Z"}])
+        messages = extract_messages([{"lead_id": 1, "text": "oi", "direction": "incoming"}])
+        report = analyze(leads, messages)
+        self.assertIn("leads_by_hour", report["summary"])
+        self.assertIn("leads_by_weekday", report["summary"])
+        self.assertIn("10", report["summary"]["leads_by_hour"])
+
 
 # ---------------------------------------------------------------------------
 # render_markdown
@@ -291,12 +432,114 @@ class RenderMarkdownTest(unittest.TestCase):
         msgs_data = [{"lead_id": i, "text": "x", "direction": "incoming"} for i in range(30)]
         report = analyze(extract_leads(leads_data), extract_messages(msgs_data))
         md = render_markdown(report, top_n=5)
-        table_rows = [
-            line for line in md.splitlines()
-            if line.startswith("| `") and "⚠️" not in line
-        ]
-        # Top N table + possibly urgent/unanswered tables — check top table has at most 5
-        self.assertLessEqual(len([l for l in md.splitlines() if l.startswith("| `")]), 5 * 3)
+        table_rows = [line for line in md.splitlines() if line.startswith("| `")]
+        self.assertLessEqual(len(table_rows), 5 * 4)
+
+    def test_delta_column_shown(self):
+        leads = extract_leads([{"id": "1"}])
+        messages = extract_messages([
+            {"lead_id": "1", "text": "Seja bem-vindo à Clinica QARA!", "direction": "outgoing"},
+        ])
+        prev = {"1": {"bot_stage": 0, "unanswered": False, "priority_score": 20}}
+        report = analyze(leads, messages, prev_snapshot=prev)
+        md = render_markdown(report)
+        self.assertIn("+1", md)
+
+    def test_payment_type_column(self):
+        leads = extract_leads([{"id": "1"}])
+        messages = extract_messages([
+            {"lead_id": "1", "text": "aceito Unimed?", "direction": "incoming"},
+        ])
+        report = analyze(leads, messages)
+        md = render_markdown(report)
+        self.assertIn("Convênio", md)
+
+    def test_overdue_task_section(self):
+        recent_ts = int(time.time()) - 60
+        leads = extract_leads([{"id": "99"}])
+        messages = extract_messages([
+            {"lead_id": "99", "text": "oi", "direction": "outgoing", "created_at": recent_ts},
+        ])
+        report = analyze(leads, messages, overdue_task_leads={"99"})
+        md = render_markdown(report)
+        self.assertIn("Tarefa Vencida", md)
+
+
+# ---------------------------------------------------------------------------
+# render_html
+# ---------------------------------------------------------------------------
+
+class RenderHtmlTest(unittest.TestCase):
+    def _make_report(self):
+        leads = extract_leads([{"id": 1, "name": "João", "created_at": "2026-05-14T10:00:00Z"}])
+        messages = extract_messages([
+            {"lead_id": 1, "text": "vim do instagram, quero agendar com Dr. Ceccarelli", "direction": "incoming", "created_at": 1_700_000_000},
+            {"lead_id": 1, "text": "Seja bem-vindo à Clinica QARA!", "direction": "outgoing", "created_at": 1_700_000_060},
+        ])
+        return analyze(leads, messages, stale_hours=999999)
+
+    def test_is_valid_html(self):
+        html = render_html(self._make_report())
+        self.assertIn("<!DOCTYPE html>", html)
+        self.assertIn("</html>", html)
+
+    def test_contains_lead_id(self):
+        html = render_html(self._make_report())
+        self.assertIn("1", html)
+
+    def test_contains_bar_chart_elements(self):
+        html = render_html(self._make_report())
+        self.assertIn("class='bar'", html)
+
+    def test_contains_summary_cards(self):
+        html = render_html(self._make_report())
+        self.assertIn("class='card'", html)
+
+    def test_contains_clinic_name(self):
+        html = render_html(self._make_report())
+        self.assertIn("Clínica QARA", html)
+
+
+# ---------------------------------------------------------------------------
+# Delta snapshot
+# ---------------------------------------------------------------------------
+
+class DeltaSnapshotTest(unittest.TestCase):
+    def test_save_and_load_roundtrip(self):
+        leads = extract_leads([{"id": "1"}, {"id": "2"}])
+        messages = extract_messages([
+            {"lead_id": "1", "text": "oi", "direction": "incoming"},
+            {"lead_id": "2", "text": "Seja bem-vindo à Clinica QARA!", "direction": "outgoing"},
+        ])
+        report = analyze(leads, messages)
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as f:
+            out_path = f.name
+        save_delta_snapshot(report, out_path)
+        loaded = load_delta_snapshot(out_path)
+        self.assertIsNotNone(loaded)
+        self.assertIn("1", loaded)
+        self.assertIn("bot_stage", loaded["1"])
+
+    def test_load_missing_returns_none(self):
+        self.assertIsNone(load_delta_snapshot("/tmp/nonexistent_snapshot_xyz.md"))
+
+
+# ---------------------------------------------------------------------------
+# format_seconds
+# ---------------------------------------------------------------------------
+
+class FormatSecondsTest(unittest.TestCase):
+    def test_none(self):
+        self.assertEqual(format_seconds(None), "n/d")
+
+    def test_minutes_only(self):
+        self.assertEqual(format_seconds(90), "1min")
+
+    def test_hours_and_minutes(self):
+        self.assertEqual(format_seconds(3660), "1h 1min")
+
+    def test_zero(self):
+        self.assertEqual(format_seconds(0), "0min")
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +568,8 @@ class WriteCsvTest(unittest.TestCase):
         self.assertIn("source", header)
         self.assertIn("specialty", header)
         self.assertIn("bot_stage", header)
+        self.assertIn("payment_type", header)
+        self.assertIn("return_patient", header)
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +591,7 @@ class CliTest(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(ROOT / "kommo_lead_analyzer.py"),
                  "--leads-file", str(leads_f), "--messages-file", str(msgs_f),
-                 "--format", "json", "--output", str(out_f)],
+                 "--format", "json", "--output", str(out_f), "--no-delta"],
                 check=True, text=True, capture_output=True,
             )
             self.assertIn("Relatório salvo", result.stdout)
@@ -354,14 +599,36 @@ class CliTest(unittest.TestCase):
             self.assertIn("sources", data["summary"])
             self.assertIn("specialties", data["summary"])
             self.assertIn("bot_stages", data["summary"])
+            self.assertIn("payment_types", data["summary"])
             lead = data["leads"][0]
             self.assertEqual(lead["source"], "instagram")
             self.assertEqual(lead["specialty"], "unhas")
+            self.assertIn("payment_type", lead)
+            self.assertIn("return_patient", lead)
+            self.assertIn("first_response_seconds", lead)
+
+    def test_html_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            leads_f = tmp_path / "leads.json"
+            msgs_f = tmp_path / "msgs.json"
+            out_f = tmp_path / "report.html"
+            leads_f.write_text(json.dumps([{"id": 1}]), encoding="utf-8")
+            msgs_f.write_text(json.dumps([{"lead_id": 1, "text": "oi", "direction": "incoming"}]), encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(ROOT / "kommo_lead_analyzer.py"),
+                 "--leads-file", str(leads_f), "--messages-file", str(msgs_f),
+                 "--format", "html", "--output", str(out_f), "--no-delta"],
+                check=True, capture_output=True,
+            )
+            content = out_f.read_text(encoding="utf-8")
+            self.assertIn("<!DOCTYPE html>", content)
+            self.assertIn("Clínica QARA", content)
 
     def test_top_n_argument(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
-            leads_data = [{"id": i, "name": f"Lead {i}"} for i in range(10)]
+            leads_data = [{"id": i, "name": "Lead " + str(i)} for i in range(10)]
             msgs_data = [{"lead_id": i, "text": "oi", "direction": "incoming"} for i in range(10)]
             leads_f = tmp_path / "leads.json"
             msgs_f = tmp_path / "msgs.json"
@@ -371,13 +638,12 @@ class CliTest(unittest.TestCase):
             subprocess.run(
                 [sys.executable, str(ROOT / "kommo_lead_analyzer.py"),
                  "--leads-file", str(leads_f), "--messages-file", str(msgs_f),
-                 "--top-n", "3", "--output", str(out_f)],
+                 "--top-n", "3", "--output", str(out_f), "--no-delta"],
                 check=True, capture_output=True,
             )
             content = out_f.read_text(encoding="utf-8")
-            # Top priorities table rows (lines starting with | ` with lead IDs)
             priority_rows = [l for l in content.splitlines() if l.startswith("| `")]
-            self.assertLessEqual(len(priority_rows), 9)  # at most 3 tables × 3 rows
+            self.assertLessEqual(len(priority_rows), 12)  # at most 4 tables × 3 rows
 
     def test_filter_from_requires_from_api(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -394,6 +660,42 @@ class CliTest(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--from-api", result.stderr)
+
+    def test_delta_snapshot_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            leads_f = tmp_path / "leads.json"
+            msgs_f = tmp_path / "msgs.json"
+            out_f = tmp_path / "out.md"
+            leads_f.write_text(json.dumps([{"id": 1}]), encoding="utf-8")
+            msgs_f.write_text(json.dumps([{"lead_id": 1, "text": "oi", "direction": "incoming"}]), encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(ROOT / "kommo_lead_analyzer.py"),
+                 "--leads-file", str(leads_f), "--messages-file", str(msgs_f),
+                 "--output", str(out_f)],
+                check=True, capture_output=True,
+            )
+            snapshot_path = tmp_path / "out.md.snapshot.json"
+            self.assertTrue(snapshot_path.exists())
+            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            self.assertIn("1", data)
+
+    def test_no_delta_skips_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            leads_f = tmp_path / "leads.json"
+            msgs_f = tmp_path / "msgs.json"
+            out_f = tmp_path / "out.md"
+            leads_f.write_text(json.dumps([{"id": 1}]), encoding="utf-8")
+            msgs_f.write_text(json.dumps([{"lead_id": 1, "text": "oi", "direction": "incoming"}]), encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(ROOT / "kommo_lead_analyzer.py"),
+                 "--leads-file", str(leads_f), "--messages-file", str(msgs_f),
+                 "--output", str(out_f), "--no-delta"],
+                check=True, capture_output=True,
+            )
+            snapshot_path = tmp_path / "out.md.snapshot.json"
+            self.assertFalse(snapshot_path.exists())
 
 
 if __name__ == "__main__":

@@ -80,7 +80,7 @@ SPECIALTY_LABELS: dict[str, str] = {
 SOURCE_KEYWORDS: dict[str, list[str]] = {
     "instagram": ["instagram"],
     "anuncio":   ["anúncio", "anuncio", "através do anúncio", "atraves do anuncio"],
-    "pagina":    ["pela página", "pela pagina", "pelo site", "pela page", "pela página"],
+    "pagina":    ["pela página", "pela pagina", "pelo site", "pela page"],
 }
 SOURCE_LABELS: dict[str, str] = {
     "instagram": "Instagram",
@@ -90,13 +90,31 @@ SOURCE_LABELS: dict[str, str] = {
 }
 
 CITY_KEYWORDS: dict[str, list[str]] = {
-    "Copacabana":     ["copacabana", "santa clara"],
-    "Barra da Tijuca":["barra da tijuca", "barra da tijuca"],
-    "São Paulo":      ["são paulo", "sao paulo", "itaim", "joaquim floriano"],
+    "Copacabana":      ["copacabana", "santa clara"],
+    "Barra da Tijuca": ["barra da tijuca"],
+    "São Paulo":       ["são paulo", "sao paulo", "itaim", "joaquim floriano"],
 }
 
+PAYMENT_KEYWORDS: dict[str, list[str]] = {
+    "convenio": [
+        "convênio", "convenio", "plano de saúde", "plano de saude",
+        "unimed", "bradesco saúde", "bradesco saude", "amil", "sulamerica",
+        "sul américa", "notre dame", "hapvida", "assim saúde", "assim saude",
+        "golden cross", "porto seguro saúde", "porto seguro saude",
+    ],
+    "particular": ["particular", "sem convênio", "sem convenio"],
+}
+
+RETURN_PATIENT_KEYWORDS = [
+    "já sou paciente", "ja sou paciente", "já consultei", "ja consultei",
+    "retorno", "remarcar", "já fui", "ja fui", "já fiz tratamento",
+    "acompanhamento", "já realizei", "ja realizei", "paciente antiga",
+    "paciente antigo", "voltei", "voltar a consultar",
+]
+
+WEEKDAY_NAMES = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+
 # Bot funnel stages ordered from highest to lowest
-# Each entry: (stage_int, trigger_phrases_in_outgoing_messages)
 _BOT_FUNNEL: list[tuple[int, list[str]]] = [
     (5, ["entrará em contato", "entrara em contato", "oferecer toda a ajuda"]),
     (4, ["prontos para agendar", "melhor horário para você", "melhor horario para voce",
@@ -163,7 +181,6 @@ def parse_timestamp(value: Any) -> int | None:
     if value in (None, ""):
         return None
     if isinstance(value, (int, float)):
-        # Kommo timestamps are seconds. Accept milliseconds too.
         return int(value / 1000) if value > 10_000_000_000 else int(value)
     text = str(value).strip()
     if text.isdigit():
@@ -201,7 +218,6 @@ def read_json_or_csv(path: str) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
-        # Kommo API responses usually place entities under _embedded.
         embedded = data.get("_embedded")
         if isinstance(embedded, dict):
             for value in embedded.values():
@@ -246,7 +262,6 @@ def extract_messages(rows: Iterable[dict[str, Any]]) -> list[Message]:
     for row in rows:
         lead_id = str(first_present(row, LEAD_ID_KEYS) or "").strip()
         if not lead_id:
-            # Kommo notes may store the entity id in nested metadata.
             params = row.get("params") if isinstance(row.get("params"), dict) else {}
             lead_id = str(first_present(params, LEAD_ID_KEYS) or "").strip()
         if not lead_id:
@@ -267,7 +282,6 @@ def extract_messages(rows: Iterable[dict[str, Any]]) -> list[Message]:
 
 
 def infer_direction(row: dict[str, Any], text: str) -> str:
-    # Kommo note_type integer takes priority when available.
     params = row.get("params") if isinstance(row.get("params"), dict) else {}
     note_type_raw = row.get("note_type") or params.get("note_type")
     if note_type_raw is not None:
@@ -305,7 +319,6 @@ def _match_keywords(text_lower: str, catalog: dict[str, list[str]]) -> str | Non
 
 
 def detect_source(messages: list[Message]) -> str:
-    """Detect lead source from the first message (bot trigger text)."""
     first = next((m for m in messages if m.direction == "incoming"), None)
     if first:
         low = first.text.lower()
@@ -316,13 +329,11 @@ def detect_source(messages: list[Message]) -> str:
 
 
 def detect_specialty(messages: list[Message]) -> str | None:
-    """Detect requested specialty from any message in the conversation."""
     full_text = " ".join(m.text.lower() for m in messages)
     return _match_keywords(full_text, SPECIALTY_KEYWORDS)
 
 
 def detect_city(messages: list[Message]) -> str | None:
-    """Detect preferred city from any message."""
     full_text = " ".join(m.text.lower() for m in messages)
     for city, words in CITY_KEYWORDS.items():
         if any(w in full_text for w in words):
@@ -331,7 +342,6 @@ def detect_city(messages: list[Message]) -> str | None:
 
 
 def detect_bot_stage(messages: list[Message]) -> int:
-    """Detect the highest bot funnel stage reached based on outgoing message text."""
     outgoing_text = " ".join(m.text.lower() for m in messages if m.direction in ("outgoing", "unknown"))
     if not outgoing_text:
         return 0
@@ -339,6 +349,31 @@ def detect_bot_stage(messages: list[Message]) -> int:
         if any(p in outgoing_text for p in phrases):
             return stage
     return 0
+
+
+def detect_payment_type(messages: list[Message]) -> str | None:
+    """Return 'convenio', 'particular', or None if not mentioned."""
+    incoming_text = " ".join(m.text.lower() for m in messages if m.direction == "incoming")
+    return _match_keywords(incoming_text, PAYMENT_KEYWORDS)
+
+
+def detect_return_patient(messages: list[Message]) -> bool:
+    """Return True if the patient indicates they have been to the clinic before."""
+    incoming_text = " ".join(m.text.lower() for m in messages if m.direction == "incoming")
+    return any(kw in incoming_text for kw in RETURN_PATIENT_KEYWORDS)
+
+
+def compute_first_response_seconds(messages: list[Message]) -> int | None:
+    """Return seconds from the first incoming message to the first outgoing reply."""
+    sorted_msgs = sorted(messages, key=lambda m: m.created_at or 0)
+    first_in: Message | None = None
+    for msg in sorted_msgs:
+        if msg.direction == "incoming" and first_in is None:
+            first_in = msg
+        elif msg.direction == "outgoing" and first_in is not None:
+            if first_in.created_at and msg.created_at and msg.created_at >= first_in.created_at:
+                return msg.created_at - first_in.created_at
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -354,12 +389,19 @@ def count_keywords(text: str, catalog: dict[str, list[str]]) -> int:
 # Core analysis
 # ---------------------------------------------------------------------------
 
-def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 24) -> dict[str, Any]:
+def analyze(
+    leads: dict[str, Lead],
+    messages: list[Message],
+    stale_hours: int = 24,
+    name_map: dict[str, str] | None = None,
+    overdue_task_leads: set[str] | None = None,
+    prev_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     by_lead: dict[str, list[Message]] = defaultdict(list)
     for message in messages:
         by_lead[message.lead_id].append(message)
         if message.lead_id not in leads:
-            leads[message.lead_id] = Lead(id=message.lead_id, name=f"Lead {message.lead_id}")
+            leads[message.lead_id] = Lead(id=message.lead_id, name="Lead " + message.lead_id)
 
     now = int(time.time())
     lead_reports: list[dict[str, Any]] = []
@@ -370,10 +412,21 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
     source_counter: Counter[str] = Counter()
     city_counter: Counter[str] = Counter()
     bot_stage_counter: Counter[int] = Counter()
+    payment_counter: Counter[str] = Counter()
+    return_patient_count = 0
+    leads_by_hour: Counter[int] = Counter()
+    leads_by_weekday: Counter[int] = Counter()
 
     for lead in leads.values():
-        pipeline_counter[lead.pipeline_id or "unknown"] += 1
-        status_counter[lead.status_id or "unknown"] += 1
+        pipeline_name = (name_map or {}).get(lead.pipeline_id, lead.pipeline_id) if lead.pipeline_id else ""
+        status_name = (name_map or {}).get(lead.status_id, lead.status_id) if lead.status_id else ""
+        pipeline_counter[pipeline_name or "unknown"] += 1
+        status_counter[status_name or "unknown"] += 1
+
+        if lead.created_at:
+            ts = dt.datetime.fromtimestamp(lead.created_at, tz=dt.timezone.utc)
+            leads_by_hour[ts.hour] += 1
+            leads_by_weekday[ts.weekday()] += 1
 
         lead_messages = sorted(by_lead.get(lead.id, []), key=lambda m: m.created_at or 0)
         full_text = " ".join(m.text for m in lead_messages)
@@ -390,6 +443,7 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
             and last_message.created_at
             and now - last_message.created_at > stale_hours * 3600
         )
+        has_overdue_task = lead.id in (overdue_task_leads or set())
         score = max(
             0,
             min(
@@ -400,7 +454,8 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
                 - objections * 8
                 - negative * 18
                 + (10 if lead.price else 0)
-                + (-15 if stale else 0),
+                + (-15 if stale else 0)
+                + (10 if has_overdue_task else 0),
             ),
         )
 
@@ -416,23 +471,35 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
         last_ts = last_message.created_at if last_message else None
         unanswered_hours: float | None = round((now - last_ts) / 3600, 1) if unanswered and last_ts else None
 
-        # Clinic-specific enrichment
         source = detect_source(lead_messages)
         specialty = detect_specialty(lead_messages)
         city = detect_city(lead_messages)
         bot_stage = detect_bot_stage(lead_messages)
+        payment_type = detect_payment_type(lead_messages)
+        return_patient = detect_return_patient(lead_messages)
+        first_response = compute_first_response_seconds(lead_messages)
 
         source_counter[source] += 1
         specialty_counter[specialty or "desconhecida"] += 1
         city_counter[city or "não identificada"] += 1
         bot_stage_counter[bot_stage] += 1
+        if payment_type:
+            payment_counter[payment_type] += 1
+        if return_patient:
+            return_patient_count += 1
+
+        prev_lead = (prev_snapshot or {}).get(lead.id, {})
+        prev_bot_stage: int | None = prev_lead.get("bot_stage") if prev_lead else None
+        delta_bot_stage: int | None = (bot_stage - prev_bot_stage) if prev_bot_stage is not None else None
 
         lead_reports.append(
             {
                 "lead_id": lead.id,
                 "name": lead.name,
                 "pipeline_id": lead.pipeline_id or None,
+                "pipeline_name": pipeline_name or None,
                 "status_id": lead.status_id or None,
+                "status_name": status_name or None,
                 "price": lead.price,
                 "messages": len(lead_messages),
                 "source": source,
@@ -441,6 +508,10 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
                 "city": city,
                 "bot_stage": bot_stage,
                 "bot_stage_label": BOT_STAGE_LABELS.get(bot_stage, str(bot_stage)),
+                "payment_type": payment_type,
+                "return_patient": return_patient,
+                "first_response_seconds": first_response,
+                "has_overdue_task": has_overdue_task,
                 "buying_signals": buying,
                 "objections": objections,
                 "urgency_signals": urgency,
@@ -450,23 +521,26 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
                 "unanswered_hours": unanswered_hours,
                 "stale_unanswered": stale,
                 "priority_score": score,
-                "recommendation": recommend(score, unanswered, stale, objections),
+                "prev_bot_stage": prev_bot_stage,
+                "delta_bot_stage": delta_bot_stage,
+                "recommendation": recommend(score, unanswered, stale, objections, has_overdue_task),
             }
         )
 
-    # Sort: stale first → unanswered → score desc
     lead_reports.sort(
-        key=lambda r: (r["stale_unanswered"], r["unanswered"], r["priority_score"], r["messages"]),
+        key=lambda r: (r["has_overdue_task"], r["stale_unanswered"], r["unanswered"], r["priority_score"], r["messages"]),
         reverse=True,
     )
 
     avg_response = sum(response_times) / len(response_times) if response_times else None
 
-    # Specialty conversion: leads that reached bot_stage >= 4
     specialty_booked: Counter[str] = Counter()
     for r in lead_reports:
         if r["bot_stage"] >= 4:
             specialty_booked[r["specialty"] or "desconhecida"] += 1
+
+    first_response_list = [r["first_response_seconds"] for r in lead_reports if r["first_response_seconds"] is not None]
+    avg_first_response = sum(first_response_list) / len(first_response_list) if first_response_list else None
 
     return {
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -475,7 +549,10 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
             "total_messages": len(messages),
             "unanswered_leads": sum(1 for r in lead_reports if r["unanswered"]),
             "stale_unanswered_leads": sum(1 for r in lead_reports if r["stale_unanswered"]),
+            "overdue_task_leads": sum(1 for r in lead_reports if r["has_overdue_task"]),
+            "return_patients": return_patient_count,
             "average_response_seconds": round(avg_response, 2) if avg_response is not None else None,
+            "average_first_response_seconds": round(avg_first_response, 2) if avg_first_response is not None else None,
             "pipelines": dict(pipeline_counter),
             "statuses": dict(status_counter),
             "sources": dict(source_counter),
@@ -483,6 +560,9 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
             "cities": dict(city_counter),
             "bot_stages": {BOT_STAGE_LABELS.get(k, str(k)): v for k, v in bot_stage_counter.items()},
             "specialty_booked": dict(specialty_booked),
+            "payment_types": dict(payment_counter),
+            "leads_by_hour": {str(h): c for h, c in sorted(leads_by_hour.items())},
+            "leads_by_weekday": {WEEKDAY_NAMES[d]: c for d, c in sorted(leads_by_weekday.items())},
         },
         "leads": lead_reports,
     }
@@ -492,7 +572,15 @@ def analyze(leads: dict[str, Lead], messages: list[Message], stale_hours: int = 
 # Recommendation
 # ---------------------------------------------------------------------------
 
-def recommend(score: int, unanswered: bool, stale: bool, objections: int) -> str:
+def recommend(
+    score: int,
+    unanswered: bool,
+    stale: bool,
+    objections: int,
+    has_overdue_task: bool = False,
+) -> str:
+    if has_overdue_task:
+        return "Tarefa vencida: resolver pendência e retomar contato."
     if stale:
         return "Responder agora: lead sem retorno há muito tempo."
     if unanswered and score >= 60:
@@ -507,7 +595,7 @@ def recommend(score: int, unanswered: bool, stale: bool, objections: int) -> str
 
 
 # ---------------------------------------------------------------------------
-# Report rendering
+# Report rendering — Markdown
 # ---------------------------------------------------------------------------
 
 def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
@@ -520,16 +608,21 @@ def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
         lines += [f"_Gerado em {generated}_", ""]
 
     # --- Overview ---
+    avg_resp = format_seconds(summary["average_response_seconds"])
+    avg_first = format_seconds(summary.get("average_first_response_seconds"))
     lines += [
         "## Visão Geral",
         "",
-        f"| Métrica | Valor |",
-        f"| --- | --- |",
-        f"| Total de leads | **{summary['total_leads']}** |",
-        f"| Total de mensagens | **{summary['total_messages']}** |",
-        f"| Leads sem resposta | **{summary['unanswered_leads']}** |",
-        f"| Leads vencidos sem resposta | **{summary['stale_unanswered_leads']}** |",
-        f"| Tempo médio de resposta | **{format_seconds(summary['average_response_seconds'])}** |",
+        "| Métrica | Valor |",
+        "| --- | --- |",
+        "| Total de leads | **" + str(summary["total_leads"]) + "** |",
+        "| Total de mensagens | **" + str(summary["total_messages"]) + "** |",
+        "| Leads sem resposta | **" + str(summary["unanswered_leads"]) + "** |",
+        "| Leads vencidos sem resposta | **" + str(summary["stale_unanswered_leads"]) + "** |",
+        "| Leads com tarefa vencida | **" + str(summary.get("overdue_task_leads", 0)) + "** |",
+        "| Pacientes de retorno | **" + str(summary.get("return_patients", 0)) + "** |",
+        "| Tempo médio de resposta | **" + avg_resp + "** |",
+        "| Tempo médio 1ª resposta | **" + avg_first + "** |",
         "",
     ]
 
@@ -541,7 +634,7 @@ def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
         lines += ["| Canal | Leads | % |", "| --- | ---: | ---: |"]
         for key, cnt in sorted(sources.items(), key=lambda x: -x[1]):
             label = SOURCE_LABELS.get(key, key)
-            lines.append(f"| {label} | {cnt} | {cnt/total*100:.0f}% |")
+            lines.append("| " + label + " | " + str(cnt) + " | " + str(int(cnt / total * 100)) + "% |")
         lines.append("")
 
     # --- By specialty ---
@@ -553,8 +646,8 @@ def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
         for key, cnt in sorted(specialties.items(), key=lambda x: -x[1]):
             label = SPECIALTY_LABELS.get(key, key)
             bk = booked.get(key, 0)
-            conv = f"{bk/cnt*100:.0f}%" if cnt else "—"
-            lines.append(f"| {label} | {cnt} | {bk} | {conv} |")
+            conv = str(int(bk / cnt * 100)) + "%" if cnt else "—"
+            lines.append("| " + label + " | " + str(cnt) + " | " + str(bk) + " | " + conv + " |")
         lines.append("")
 
     # --- By city ---
@@ -563,7 +656,7 @@ def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
         lines += ["## Por Unidade", ""]
         lines += ["| Unidade | Leads |", "| --- | ---: |"]
         for city, cnt in sorted(cities.items(), key=lambda x: -x[1]):
-            lines.append(f"| {city} | {cnt} |")
+            lines.append("| " + city + " | " + str(cnt) + " |")
         lines.append("")
 
     # --- Bot funnel ---
@@ -573,62 +666,121 @@ def render_markdown(report: dict[str, Any], top_n: int = 30) -> str:
         lines += ["## Funil do Bot", ""]
         lines += ["| Etapa | Leads | % |", "| --- | ---: | ---: |"]
         for label, cnt in sorted(bot_stages.items(), key=lambda x: -x[1]):
-            lines.append(f"| {label} | {cnt} | {cnt/total_b*100:.0f}% |")
+            lines.append("| " + label + " | " + str(cnt) + " | " + str(int(cnt / total_b * 100)) + "% |")
         lines.append("")
+
+    # --- Payment types ---
+    payment_types = summary.get("payment_types", {})
+    if payment_types:
+        lines += ["## Tipo de Pagamento Mencionado", ""]
+        lines += ["| Tipo | Leads |", "| --- | ---: |"]
+        labels = {"convenio": "Convênio", "particular": "Particular"}
+        for key, cnt in sorted(payment_types.items(), key=lambda x: -x[1]):
+            lines.append("| " + labels.get(key, key) + " | " + str(cnt) + " |")
+        lines.append("")
+
+    # --- Hour/weekday analysis ---
+    leads_by_hour = summary.get("leads_by_hour", {})
+    leads_by_weekday = summary.get("leads_by_weekday", {})
+    if leads_by_hour or leads_by_weekday:
+        lines += ["## Distribuição Temporal", ""]
+        if leads_by_weekday:
+            lines += ["**Por dia da semana:**", ""]
+            lines += ["| Dia | Leads |", "| --- | ---: |"]
+            for day, cnt in leads_by_weekday.items():
+                lines.append("| " + day + " | " + str(cnt) + " |")
+            lines.append("")
+        if leads_by_hour:
+            lines += ["**Por hora (UTC):**", ""]
+            lines += ["| Hora | Leads |", "| --- | ---: |"]
+            for hour, cnt in sorted(leads_by_hour.items(), key=lambda x: int(x[0])):
+                lines.append("| " + hour + "h | " + str(cnt) + " |")
+            lines.append("")
 
     # --- Urgent: stale unanswered ---
     stale_leads = [r for r in all_leads if r["stale_unanswered"]]
     if stale_leads:
-        lines += [f"## ⚠️ Urgente — Sem Resposta Vencida ({len(stale_leads)} leads)", ""]
+        lines += ["## ⚠️ Urgente — Sem Resposta Vencida (" + str(len(stale_leads)) + " leads)", ""]
         lines += ["| ID | Lead | Especialidade | Cidade | Sem resposta | Ação |",
                   "| --- | --- | --- | --- | ---: | --- |"]
         for r in stale_leads:
-            hours = f"{r['unanswered_hours']}h" if r["unanswered_hours"] else "—"
+            hours = str(r["unanswered_hours"]) + "h" if r["unanswered_hours"] else "—"
             spec = r.get("specialty_label") or "—"
             city = r.get("city") or "—"
             lines.append(
-                f"| `{r['lead_id']}` | {r['name'] or r['lead_id']} | {spec} | {city} | {hours} | {r['recommendation']} |"
+                "| `" + r["lead_id"] + "` | " + (r["name"] or r["lead_id"]) + " | " +
+                spec + " | " + city + " | " + hours + " | " + r["recommendation"] + " |"
+            )
+        lines.append("")
+
+    # --- Overdue tasks ---
+    overdue_leads = [r for r in all_leads if r.get("has_overdue_task") and not r["stale_unanswered"]]
+    if overdue_leads:
+        lines += ["## 🔔 Tarefa Vencida (" + str(len(overdue_leads)) + " leads)", ""]
+        lines += ["| ID | Lead | Especialidade | Score | Ação |",
+                  "| --- | --- | --- | ---: | --- |"]
+        for r in overdue_leads[:top_n]:
+            spec = r.get("specialty_label") or "—"
+            lines.append(
+                "| `" + r["lead_id"] + "` | " + (r["name"] or r["lead_id"]) + " | " +
+                spec + " | " + str(r["priority_score"]) + " | " + r["recommendation"] + " |"
             )
         lines.append("")
 
     # --- Unanswered (not stale) ---
     unanswered_leads = [r for r in all_leads if r["unanswered"] and not r["stale_unanswered"]]
     if unanswered_leads:
-        lines += [f"## 📬 Aguardando Resposta ({len(unanswered_leads)} leads)", ""]
+        lines += ["## 📬 Aguardando Resposta (" + str(len(unanswered_leads)) + " leads)", ""]
         lines += ["| ID | Lead | Especialidade | Cidade | Sem resposta | Score |",
                   "| --- | --- | --- | --- | ---: | ---: |"]
         for r in unanswered_leads[:top_n]:
-            hours = f"{r['unanswered_hours']}h" if r["unanswered_hours"] else "—"
+            hours = str(r["unanswered_hours"]) + "h" if r["unanswered_hours"] else "—"
             spec = r.get("specialty_label") or "—"
             city = r.get("city") or "—"
             lines.append(
-                f"| `{r['lead_id']}` | {r['name'] or r['lead_id']} | {spec} | {city} | {hours} | {r['priority_score']} |"
+                "| `" + r["lead_id"] + "` | " + (r["name"] or r["lead_id"]) + " | " +
+                spec + " | " + city + " | " + hours + " | " + str(r["priority_score"]) + " |"
             )
         lines.append("")
 
     # --- Full priority table ---
-    lines += [f"## Top {top_n} Prioridades", ""]
+    lines += ["## Top " + str(top_n) + " Prioridades", ""]
     lines += [
-        "| ID | Lead | Canal | Especialidade | Cidade | Etapa Bot | Msgs | Sem resp. | Score | Recomendação |",
-        "| --- | --- | --- | --- | --- | --- | ---: | --- | ---: | --- |",
+        "| ID | Lead | Canal | Especialidade | Cidade | Etapa Bot | Δ | Pgto | Msgs | Sem resp. | Score | Recomendação |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- | ---: | --- |",
     ]
     for r in all_leads[:top_n]:
         if r["stale_unanswered"] and r["unanswered_hours"]:
-            unanswered_label = f"{r['unanswered_hours']}h ⚠️"
+            unanswered_label = str(r["unanswered_hours"]) + "h ⚠️"
         elif r["unanswered"] and r["unanswered_hours"]:
-            unanswered_label = f"{r['unanswered_hours']}h"
+            unanswered_label = str(r["unanswered_hours"]) + "h"
         elif r["unanswered"]:
             unanswered_label = "sim"
         else:
             unanswered_label = "—"
+
+        delta = r.get("delta_bot_stage")
+        if delta is None:
+            delta_label = "—"
+        elif delta > 0:
+            delta_label = "+" + str(delta)
+        elif delta < 0:
+            delta_label = str(delta)
+        else:
+            delta_label = "="
+
         source_label = SOURCE_LABELS.get(r.get("source", ""), r.get("source", "—")) if r.get("source") else "—"
         spec_label = r.get("specialty_label") or "—"
         city_label = r.get("city") or "—"
         stage_label = r.get("bot_stage_label") or "—"
+        pgto = {"convenio": "Convênio", "particular": "Particular"}.get(r.get("payment_type", ""), "—")
+        task_flag = " 🔔" if r.get("has_overdue_task") else ""
         lines.append(
-            f"| `{r['lead_id']}` | {r['name'] or r['lead_id']} | {source_label} | {spec_label} | "
-            f"{city_label} | {stage_label} | {r['messages']} | {unanswered_label} | "
-            f"{r['priority_score']} | {r['recommendation']} |"
+            "| `" + r["lead_id"] + "` | " + (r["name"] or r["lead_id"]) + task_flag + " | " +
+            source_label + " | " + spec_label + " | " + city_label + " | " +
+            stage_label + " | " + delta_label + " | " + pgto + " | " +
+            str(r["messages"]) + " | " + unanswered_label + " | " +
+            str(r["priority_score"]) + " | " + r["recommendation"] + " |"
         )
 
     return "\n".join(lines) + "\n"
@@ -640,8 +792,150 @@ def format_seconds(seconds: float | None) -> str:
     minutes = int(seconds // 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
-        return f"{hours}h {minutes}min"
-    return f"{minutes}min"
+        return str(hours) + "h " + str(minutes) + "min"
+    return str(minutes) + "min"
+
+
+# ---------------------------------------------------------------------------
+# Report rendering — HTML
+# ---------------------------------------------------------------------------
+
+def render_html(report: dict[str, Any], top_n: int = 30) -> str:
+    summary = report["summary"]
+    generated = report.get("generated_at", "")
+    all_leads = report["leads"]
+
+    def _bar_chart(data: dict[str, int], title: str) -> str:
+        if not data:
+            return ""
+        max_val = max(data.values()) or 1
+        rows = ""
+        for label, val in sorted(data.items(), key=lambda x: -x[1]):
+            pct = int(val / max_val * 100)
+            rows += (
+                "<tr><td class='bl'>" + _esc(label) + "</td>"
+                "<td class='bv'><div class='bar' style='width:" + str(pct) + "%'></div></td>"
+                "<td class='bn'>" + str(val) + "</td></tr>\n"
+            )
+        return "<h2>" + _esc(title) + "</h2><table class='chart'>\n" + rows + "</table>\n"
+
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+    def _lead_table(leads_subset: list[dict[str, Any]], section_title: str) -> str:
+        if not leads_subset:
+            return ""
+        rows = ""
+        for r in leads_subset:
+            stale_cls = " stale" if r["stale_unanswered"] else (" unanswered" if r["unanswered"] else "")
+            task_flag = " 🔔" if r.get("has_overdue_task") else ""
+            hours = str(r["unanswered_hours"]) + "h" if r.get("unanswered_hours") else "—"
+            pgto = {"convenio": "Conv.", "particular": "Part."}.get(r.get("payment_type", ""), "—")
+            delta = r.get("delta_bot_stage")
+            delta_str = ("+" + str(delta) if delta and delta > 0 else str(delta) if delta is not None else "—")
+            rows += (
+                "<tr class='" + stale_cls.strip() + "'>"
+                "<td><code>" + _esc(r["lead_id"]) + "</code></td>"
+                "<td>" + _esc(r["name"] or r["lead_id"]) + task_flag + "</td>"
+                "<td>" + _esc(SOURCE_LABELS.get(r.get("source", ""), r.get("source", "—") or "—")) + "</td>"
+                "<td>" + _esc(r.get("specialty_label") or "—") + "</td>"
+                "<td>" + _esc(r.get("city") or "—") + "</td>"
+                "<td>" + _esc(r.get("bot_stage_label") or "—") + "</td>"
+                "<td>" + delta_str + "</td>"
+                "<td>" + pgto + "</td>"
+                "<td>" + str(r["messages"]) + "</td>"
+                "<td>" + hours + "</td>"
+                "<td><strong>" + str(r["priority_score"]) + "</strong></td>"
+                "<td>" + _esc(r["recommendation"]) + "</td>"
+                "</tr>\n"
+            )
+        hdr = (
+            "<tr><th>ID</th><th>Lead</th><th>Canal</th><th>Especialidade</th>"
+            "<th>Cidade</th><th>Etapa Bot</th><th>Δ</th><th>Pgto</th>"
+            "<th>Msgs</th><th>Sem resp.</th><th>Score</th><th>Recomendação</th></tr>\n"
+        )
+        return "<h2>" + _esc(section_title) + "</h2><table class='leads'>\n" + hdr + rows + "</table>\n"
+
+    css = """
+body{font-family:system-ui,sans-serif;max-width:1400px;margin:0 auto;padding:16px;color:#1a1a1a}
+h1{color:#2c5f2e}h2{color:#374151;border-bottom:2px solid #e5e7eb;padding-bottom:4px}
+.cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
+.card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px 20px;min-width:160px}
+.card .val{font-size:2rem;font-weight:700;color:#2c5f2e}
+.card .lbl{font-size:.85rem;color:#6b7280}
+table{border-collapse:collapse;width:100%;margin-bottom:16px}
+th,td{padding:6px 10px;border:1px solid #e5e7eb;font-size:.85rem}
+th{background:#f3f4f6;font-weight:600}
+table.chart td{border:none;padding:3px 6px}
+.bl{white-space:nowrap;min-width:180px}.bv{width:60%}.bn{text-align:right}
+.bar{background:#2c5f2e;height:16px;border-radius:3px;min-width:4px}
+.stale{background:#fef2f2}.unanswered{background:#fffbeb}
+tr:hover{background:#f0fdf4}
+"""
+
+    sources_chart = _bar_chart(
+        {SOURCE_LABELS.get(k, k): v for k, v in summary.get("sources", {}).items()},
+        "Canal de Captação",
+    )
+    specialty_chart = _bar_chart(
+        {SPECIALTY_LABELS.get(k, k): v for k, v in summary.get("specialties", {}).items()},
+        "Por Especialidade",
+    )
+    city_chart = _bar_chart(summary.get("cities", {}), "Por Unidade")
+    bot_chart = _bar_chart(summary.get("bot_stages", {}), "Funil do Bot")
+    hour_chart = _bar_chart(
+        {k + "h": v for k, v in summary.get("leads_by_hour", {}).items()},
+        "Leads por Hora (UTC)",
+    )
+    weekday_chart = _bar_chart(summary.get("leads_by_weekday", {}), "Leads por Dia da Semana")
+
+    avg_resp = format_seconds(summary.get("average_response_seconds"))
+    avg_first = format_seconds(summary.get("average_first_response_seconds"))
+
+    cards_html = (
+        "<div class='cards'>"
+        "<div class='card'><div class='val'>" + str(summary["total_leads"]) + "</div><div class='lbl'>Total de Leads</div></div>"
+        "<div class='card'><div class='val'>" + str(summary["total_messages"]) + "</div><div class='lbl'>Mensagens</div></div>"
+        "<div class='card'><div class='val'>" + str(summary["unanswered_leads"]) + "</div><div class='lbl'>Sem Resposta</div></div>"
+        "<div class='card'><div class='val'>" + str(summary["stale_unanswered_leads"]) + "</div><div class='lbl'>Vencidos</div></div>"
+        "<div class='card'><div class='val'>" + str(summary.get("overdue_task_leads", 0)) + "</div><div class='lbl'>Tarefa Vencida</div></div>"
+        "<div class='card'><div class='val'>" + str(summary.get("return_patients", 0)) + "</div><div class='lbl'>Retorno</div></div>"
+        "<div class='card'><div class='val'>" + avg_resp + "</div><div class='lbl'>Tempo Médio Resposta</div></div>"
+        "<div class='card'><div class='val'>" + avg_first + "</div><div class='lbl'>1ª Resposta Média</div></div>"
+        "</div>"
+    )
+
+    stale_leads = [r for r in all_leads if r["stale_unanswered"]]
+    overdue_task_leads_list = [r for r in all_leads if r.get("has_overdue_task") and not r["stale_unanswered"]]
+    unanswered_only = [r for r in all_leads if r["unanswered"] and not r["stale_unanswered"]]
+
+    body = (
+        "<h1>Análise de Leads — Clínica QARA</h1>\n"
+        + ("<p><em>Gerado em " + _esc(generated) + "</em></p>\n" if generated else "")
+        + "<h2>Visão Geral</h2>\n"
+        + cards_html + "\n"
+        + sources_chart
+        + specialty_chart
+        + city_chart
+        + bot_chart
+        + weekday_chart
+        + hour_chart
+        + _lead_table(stale_leads, "⚠️ Urgente — Sem Resposta Vencida")
+        + _lead_table(overdue_task_leads_list, "🔔 Tarefas Vencidas")
+        + _lead_table(unanswered_only[:top_n], "📬 Aguardando Resposta")
+        + _lead_table(all_leads[:top_n], "Top " + str(top_n) + " Prioridades")
+    )
+
+    return (
+        "<!DOCTYPE html>\n<html lang='pt-BR'>\n<head>\n"
+        "<meta charset='UTF-8'>\n"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
+        "<title>Análise de Leads — Clínica QARA</title>\n"
+        "<style>" + css + "</style>\n"
+        "</head>\n<body>\n"
+        + body
+        + "</body>\n</html>\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -661,11 +955,41 @@ def write_csv(report: dict[str, Any], path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Delta snapshot helpers
+# ---------------------------------------------------------------------------
+
+def _snapshot_path(output_path: str) -> str:
+    return output_path + ".snapshot.json"
+
+
+def load_delta_snapshot(output_path: str) -> dict[str, Any] | None:
+    path = _snapshot_path(output_path)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def save_delta_snapshot(report: dict[str, Any], output_path: str) -> None:
+    snapshot: dict[str, Any] = {}
+    for lead in report["leads"]:
+        snapshot[lead["lead_id"]] = {
+            "bot_stage": lead["bot_stage"],
+            "unanswered": lead["unanswered"],
+            "priority_score": lead["priority_score"],
+        }
+    path = _snapshot_path(output_path)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
 
 def _api_request(url: str, token: str, timeout: int = 30, max_retries: int = 4) -> bytes:
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     request = urllib.request.Request(url, headers=headers)
     last_exc: Exception = RuntimeError("unknown error")
     for attempt in range(max_retries + 1):
@@ -679,14 +1003,14 @@ def _api_request(url: str, token: str, timeout: int = 30, max_retries: int = 4) 
                     time.sleep(2 ** attempt)
                     continue
             details = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Kommo API returned HTTP {exc.code}: {details}") from exc
+            raise RuntimeError("Kommo API returned HTTP " + str(exc.code) + ": " + details) from exc
         except urllib.error.URLError as exc:
             last_exc = exc
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 continue
-            raise RuntimeError(f"Network error reaching Kommo API: {exc.reason}") from exc
-    raise RuntimeError(f"Max retries exceeded: {last_exc}") from last_exc
+            raise RuntimeError("Network error reaching Kommo API: " + str(exc.reason)) from exc
+    raise RuntimeError("Max retries exceeded: " + str(last_exc)) from last_exc
 
 
 def fetch_kommo_collection(
@@ -696,14 +1020,17 @@ def fetch_kommo_collection(
     limit: int = 250,
     filter_from: int | None = None,
     filter_to: int | None = None,
+    extra_params: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    base = f"https://{subdomain}.kommo.com/api/v4/{path.lstrip('/')}"
+    base = "https://" + subdomain + ".kommo.com/api/v4/" + path.lstrip("/")
     params: dict[str, str] = {"limit": str(limit)}
     if filter_from is not None:
         params["filter[created_at][from]"] = str(filter_from)
     if filter_to is not None:
         params["filter[created_at][to]"] = str(filter_to)
-    url = f"{base}?{urllib.parse.urlencode(params)}"
+    if extra_params:
+        params.update(extra_params)
+    url = base + "?" + urllib.parse.urlencode(params)
     rows: list[dict[str, Any]] = []
     while url:
         payload = json.loads(_api_request(url, token).decode("utf-8"))
@@ -715,6 +1042,55 @@ def fetch_kommo_collection(
         next_href = payload.get("_links", {}).get("next", {}).get("href") if isinstance(payload, dict) else None
         url = str(urllib.parse.urljoin(url, next_href)) if next_href else ""
     return rows
+
+
+def fetch_pipeline_names(subdomain: str, token: str) -> dict[str, str]:
+    """Return a dict mapping pipeline/status IDs to human-readable names."""
+    url = "https://" + subdomain + ".kommo.com/api/v4/leads/pipelines"
+    try:
+        payload = json.loads(_api_request(url, token).decode("utf-8"))
+    except RuntimeError:
+        return {}
+    name_map: dict[str, str] = {}
+    pipelines = payload.get("_embedded", {}).get("pipelines", [])
+    for pipeline in pipelines:
+        if not isinstance(pipeline, dict):
+            continue
+        pid = str(pipeline.get("id", ""))
+        if pid:
+            name_map[pid] = str(pipeline.get("name", pid))
+        statuses = pipeline.get("_embedded", {}).get("statuses", [])
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            sid = str(status.get("id", ""))
+            if sid:
+                name_map[sid] = str(status.get("name", sid))
+    return name_map
+
+
+def fetch_overdue_task_lead_ids(subdomain: str, token: str) -> set[str]:
+    """Return set of lead IDs that have at least one incomplete overdue task."""
+    now_ts = int(time.time())
+    try:
+        rows = fetch_kommo_collection(
+            subdomain,
+            token,
+            "tasks",
+            extra_params={
+                "filter[is_completed]": "0",
+                "filter[complete_till][to]": str(now_ts),
+            },
+        )
+    except RuntimeError:
+        return set()
+    lead_ids: set[str] = set()
+    for row in rows:
+        entity_id = str(row.get("entity_id") or row.get("lead_id") or "").strip()
+        entity_type = str(row.get("entity_type") or "").lower()
+        if entity_id and (entity_type in ("leads", "lead", "") or not entity_type):
+            lead_ids.add(entity_id)
+    return lead_ids
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +1112,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="kommo_analysis.md", help="Caminho do relatório de saída.")
     parser.add_argument(
         "--format",
-        choices=("markdown", "json", "csv"),
+        choices=("markdown", "json", "csv", "html"),
         default="markdown",
         help="Formato do relatório.",
     )
@@ -750,7 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--top-n",
         type=int,
         default=30,
-        help="Quantidade de leads exibidos nas tabelas do relatório Markdown (padrão: 30).",
+        help="Quantidade de leads exibidos nas tabelas do relatório (padrão: 30).",
     )
     parser.add_argument(
         "--filter-from",
@@ -760,6 +1136,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--filter-to",
         help="Filtrar leads criados até esta data ISO 8601 (ex: 2026-12-31). Apenas com --from-api.",
     )
+    parser.add_argument(
+        "--no-delta",
+        action="store_true",
+        help="Desativa o relatório delta (não lê nem salva snapshot anterior).",
+    )
     return parser
 
 
@@ -767,7 +1148,7 @@ def _parse_date_to_timestamp(value: str) -> int:
     try:
         return int(dt.datetime.fromisoformat(value).timestamp())
     except ValueError:
-        raise ValueError(f"Data inválida: {value!r}. Use formato ISO 8601 (ex: 2026-01-01).")
+        raise ValueError("Data inválida: " + repr(value) + ". Use formato ISO 8601 (ex: 2026-01-01).")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -788,6 +1169,9 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
 
+    name_map: dict[str, str] | None = None
+    overdue_task_lead_ids: set[str] | None = None
+
     if args.from_api:
         subdomain = os.getenv("KOMMO_SUBDOMAIN", "").strip().removesuffix(".kommo.com")
         token = os.getenv("KOMMO_ACCESS_TOKEN", "").strip()
@@ -800,6 +1184,8 @@ def main(argv: list[str] | None = None) -> int:
         messages = extract_messages(
             fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
         )
+        name_map = fetch_pipeline_names(subdomain, token)
+        overdue_task_lead_ids = fetch_overdue_task_lead_ids(subdomain, token)
     else:
         if not args.messages_file:
             print("--messages-file é obrigatório quando --leads-file é usado.", file=sys.stderr)
@@ -807,7 +1193,21 @@ def main(argv: list[str] | None = None) -> int:
         leads = extract_leads(read_json_or_csv(args.leads_file))
         messages = extract_messages(read_json_or_csv(args.messages_file))
 
-    report = analyze(leads, messages, stale_hours=args.stale_hours)
+    prev_snapshot: dict[str, Any] | None = None
+    if not args.no_delta:
+        prev_snapshot = load_delta_snapshot(args.output)
+
+    report = analyze(
+        leads,
+        messages,
+        stale_hours=args.stale_hours,
+        name_map=name_map,
+        overdue_task_leads=overdue_task_lead_ids,
+        prev_snapshot=prev_snapshot,
+    )
+
+    if not args.no_delta:
+        save_delta_snapshot(report, args.output)
 
     if args.format == "json":
         content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
@@ -815,11 +1215,14 @@ def main(argv: list[str] | None = None) -> int:
             handle.write(content)
     elif args.format == "csv":
         write_csv(report, args.output)
+    elif args.format == "html":
+        with open(args.output, "w", encoding="utf-8") as handle:
+            handle.write(render_html(report, top_n=args.top_n))
     else:
         with open(args.output, "w", encoding="utf-8") as handle:
             handle.write(render_markdown(report, top_n=args.top_n))
 
-    print(f"Relatório salvo em {args.output}")
+    print("Relatório salvo em " + args.output)
     return 0
 
 
