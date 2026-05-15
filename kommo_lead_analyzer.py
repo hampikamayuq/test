@@ -1033,7 +1033,10 @@ def fetch_kommo_collection(
     url = base + "?" + urllib.parse.urlencode(params)
     rows: list[dict[str, Any]] = []
     while url:
-        payload = json.loads(_api_request(url, token).decode("utf-8"))
+        raw = _api_request(url, token).decode("utf-8").strip()
+        if not raw:
+            break
+        payload = json.loads(raw)
         embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         for value in embedded.values():
             if isinstance(value, list):
