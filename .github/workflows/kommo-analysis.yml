@@ -42,12 +42,17 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests
 
+      - name: Compute filter date (90 days ago)
+        id: filter-date
+        run: echo "date=$(date -d '90 days ago' '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
       - name: Run Kommo analysis
         run: |
           python kommo_lead_analyzer.py \
             --from-api \
             --stale-hours 48 \
             --top-n 30 \
+            --filter-from "${{ steps.filter-date.outputs.date }}" \
             --output kommo_analysis.md
 
       - name: Upload report artifact
