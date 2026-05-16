@@ -1142,6 +1142,39 @@ def fetch_overdue_task_lead_ids(subdomain: str, token: str) -> set[str]:
     return lead_ids
 
 
+def extract_custom_field_messages(leads_raw: Iterable[dict[str, Any]]) -> list[Message]:
+    """Treat each lead's non-empty custom field values as a single incoming message."""
+    _SKIP = {"none", "null", "false", "0", "-", "n/a", "não informado", "nao informado"}
+    messages: list[Message] = []
+    for lead in leads_raw:
+        lead_id = str(lead.get("id", "")).strip()
+        if not lead_id:
+            continue
+        fields = lead.get("custom_fields_values") or []
+        if not isinstance(fields, list):
+            continue
+        parts: list[str] = []
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            fname = str(f.get("field_name") or f.get("field_code") or "").strip()
+            for v in (f.get("values") or []):
+                if not isinstance(v, dict):
+                    continue
+                val = str(v.get("value") or "").strip()
+                if val and val.lower() not in _SKIP:
+                    parts.append(f"{fname}: {val}" if fname else val)
+        if parts:
+            messages.append(Message(
+                lead_id=lead_id,
+                text=" | ".join(parts),
+                created_at=parse_timestamp(lead.get("created_at")),
+                direction="incoming",
+                raw={"_source": "custom_fields"},
+            ))
+    return messages
+
+
 def build_contact_lead_map(leads_raw: list[dict[str, Any]]) -> dict[str, str]:
     """Return {contact_id: lead_id} from leads fetched with with=contacts.
 
@@ -1444,8 +1477,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--probe",
         metavar="LEAD_ID",
-        help="Modo diagnóstico: consulta vários endpoints da API para 1 lead e "
-             "imprime o JSON cru. Requer --from-api. Não gera relatório.",
+        help="Modo diagnóstico: inspeciona endpoints da API para um lead específico.",
     )
     return parser
 
@@ -1552,11 +1584,10 @@ def main(argv: list[str] | None = None) -> int:
         if not subdomain or not token:
             print("Defina KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN para usar --from-api.", file=sys.stderr)
             return 2
+
         if args.probe:
             return run_probe(subdomain, token, str(args.probe).strip())
-        # Fetch leads with embedded contacts so we can map contact_id → lead_id.
-        # Many WhatsApp integrations (Z-API, Wevo, etc.) attach notes to the
-        # Contact record rather than the Lead.
+
         leads_raw = fetch_kommo_collection(
             subdomain, token, "leads",
             filter_from=filter_from, filter_to=filter_to,
@@ -1566,7 +1597,8 @@ def main(argv: list[str] | None = None) -> int:
         contact_lead_map = build_contact_lead_map(leads_raw)
 
         lead_notes = extract_messages(
-            fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
+            fetch_kommo_collection(subdomain, token, "leads/notes",
+                                   filter_from=filter_from, filter_to=filter_to)
         )
         contact_msgs = fetch_contact_messages(subdomain, token, contact_lead_map, filter_from=filter_from, filter_to=filter_to)
         talks_msgs = fetch_talks_messages(
@@ -1583,7 +1615,8 @@ def main(argv: list[str] | None = None) -> int:
             f" + {len(talks_msgs)} msgs de conversa"
             f" + {len(custom_field_msgs)} campos customizados"
             f" + {len(wa_notes)} notas WhatsApp por lead"
-            f" = {len(messages)} total"
+            f" = {len(messages)} total",
+            file=sys.stderr,
         )
         name_map = fetch_pipeline_names(subdomain, token)
         overdue_task_lead_ids = fetch_overdue_task_lead_ids(subdomain, token)
