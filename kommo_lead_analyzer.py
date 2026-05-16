@@ -1264,7 +1264,7 @@ def fetch_talks_messages(
     # Resolve each talk to a lead_id, handling both entity_type values.
     talk_to_lead: list[tuple[str, str]] = []  # [(talk_id, lead_id)]
     for t in talks:
-        talk_id = str(t.get("id") or "").strip()
+        talk_id = str(t.get("talk_id") or t.get("id") or "").strip()
         entity_id = str(t.get("entity_id") or "").strip()
         entity_type = str(t.get("entity_type") or "").lower()
         if not talk_id or not entity_id:
@@ -1504,11 +1504,10 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
     show("GET /api/v4/talks?limit=3 (amostra geral)", talks_any)
     if isinstance(talks_any, dict):
         for t in (talks_any.get("_embedded", {}) or {}).get("talks", []) or []:
-            if isinstance(t, dict) and t.get("id"):
-                tid = str(t["id"])
+            if isinstance(t, dict) and (t.get("talk_id") or t.get("id")):
+                tid = str(t.get("talk_id") or t["id"])
                 show(f"GET /api/v4/talks/{tid}/messages",
                      _probe_get(subdomain, token, f"talks/{tid}/messages?limit=10"))
-                break
 
     show("GET /api/v4/account?with=amojo_id (verifica acesso a chats)",
          _probe_get(subdomain, token, "account?with=amojo_id,amojo_rights"))
