@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 import pathlib
 import subprocess
 import sys
@@ -268,42 +270,108 @@ class ComputeFirstResponseTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class FetchTalksMessagesTest(unittest.TestCase):
-    def test_handles_embedded_talks_list_with_talk_id(self):
-        responses = [
-            {
-                "_embedded": {
-                    "talks": [
-                        {"talk_id": "talk-abc", "entity_id": "123", "entity_type": "leads"}
-                    ]
-                },
-                "_links": {},
+    def test_chat_api_headers_sign_empty_get_body(self):
+        path = "/v2/origin/custom/scope-id/chats/chat-abc/history"
+        date = "Thu, 01 Jan 2026 12:00:00 +0000"
+        headers = kommo_lead_analyzer._chat_api_headers(
+            "GET",
+            path,
+            "chat-secret",
+            body=b"",
+            date_header=date,
+        )
+        expected_md5 = hashlib.md5(b"").hexdigest()
+        expected_signature = hmac.new(
+            b"chat-secret",
+            "\n".join(["GET", expected_md5, "application/json", date, path]).encode("utf-8"),
+            hashlib.sha1,
+        ).hexdigest()
+
+        self.assertEqual(headers["Content-MD5"], expected_md5)
+        self.assertEqual(headers["Date"], date)
+        self.assertEqual(headers["X-Signature"], expected_signature)
+
+    def test_skips_unsupported_talk_messages_endpoint_without_chat_credentials(self):
+        talks_payload = {
+            "_embedded": {
+                "talks": [
+                    {
+                        "talk_id": "talk-abc",
+                        "chat_id": "chat-abc",
+                        "entity_id": "123",
+                        "entity_type": "leads",
+                    }
+                ]
             },
-            {"_embedded": {"messages": []}},
-            {
-                "_embedded": {
-                    "messages": [
-                        {
-                            "text": "Quero agendar",
-                            "created_at": 1_700_000_000,
-                            "from": {"type": "client"},
-                        }
-                    ]
-                }
-            },
-        ]
+            "_links": {},
+        }
+        calls = []
 
         def fake_api_request(url, token):
+            calls.append(url)
             self.assertEqual(token, "token")
-            return json.dumps(responses.pop(0)).encode("utf-8")
+            self.assertNotIn("/messages", url)
+            return json.dumps(talks_payload).encode("utf-8")
 
         with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request):
             messages = fetch_talks_messages("demo", "token", known_lead_ids={"123"})
+
+        self.assertEqual(messages, [])
+        self.assertEqual(len(calls), 1)
+
+    def test_fetches_chat_history_with_chat_api_credentials(self):
+        talks_payload = {
+            "_embedded": {
+                "talks": [
+                    {
+                        "talk_id": "talk-abc",
+                        "chat_id": "chat-abc",
+                        "entity_id": "123",
+                        "entity_type": "leads",
+                    }
+                ]
+            },
+            "_links": {},
+        }
+        chat_calls = []
+
+        def fake_api_request(url, token):
+            self.assertEqual(token, "token")
+            self.assertNotIn("/messages", url)
+            return json.dumps(talks_payload).encode("utf-8")
+
+        def fake_chat_api_request(path, secret, query=None):
+            chat_calls.append((path, secret, query))
+            self.assertEqual(path, "/v2/origin/custom/scope-id/chats/chat-abc/history")
+            self.assertEqual(secret, "chat-secret")
+            self.assertEqual(query, {"offset": 0, "limit": 50})
+            return json.dumps({
+                "_embedded": {
+                    "messages": [
+                        {
+                            "message": {"text": "Quero agendar"},
+                            "created_at": 1_700_000_000,
+                            "sender": {"type": "external"},
+                        }
+                    ]
+                }
+            }).encode("utf-8")
+
+        with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request), \
+             mock.patch.object(kommo_lead_analyzer, "_chat_api_request", side_effect=fake_chat_api_request, create=True):
+            messages = fetch_talks_messages(
+                "demo",
+                "token",
+                known_lead_ids={"123"},
+                chat_scope_id="scope-id",
+                chat_secret="chat-secret",
+            )
 
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].lead_id, "123")
         self.assertEqual(messages[0].text, "Quero agendar")
         self.assertEqual(messages[0].direction, "incoming")
-        self.assertEqual(responses, [])
+        self.assertEqual(len(chat_calls), 1)
 
 
 # ---------------------------------------------------------------------------

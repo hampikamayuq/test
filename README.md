@@ -56,12 +56,18 @@ python3 kommo_lead_analyzer.py \
 export KOMMO_SUBDOMAIN="sua-conta"
 export KOMMO_ACCESS_TOKEN="seu-token-oauth"
 
+# Opcional: necessário para ler o histórico completo dos Talks via Chats API.
+export KOMMO_CHAT_SCOPE_ID="scope-id-do-canal"
+export KOMMO_CHAT_SECRET="secret-do-canal"
+
 python3 kommo_lead_analyzer.py \
   --from-api \
   --stale-hours 48 \
   --top-n 30 \
   --output kommo_analysis.md
 ```
+
+O `KOMMO_ACCESS_TOKEN` permite buscar leads, notas e a lista de Talks pela API v4. Para ler o histórico de mensagens de cada Talk, a Kommo usa a **Chats API** (`amojo.kommo.com`), que exige assinatura com `scope_id` e `secret` do canal. Se `KOMMO_CHAT_SCOPE_ID` e `KOMMO_CHAT_SECRET` não estiverem configurados, a ferramenta pula as mensagens de Talks e mostra um aviso no log.
 
 Filtrar por período:
 
@@ -95,6 +101,8 @@ Configure estes secrets em **Settings → Secrets and variables → Actions**:
 
 - `KOMMO_SUBDOMAIN` — subdomínio da conta, sem `https://` e sem `.kommo.com`.
 - `KOMMO_ACCESS_TOKEN` — token de acesso ativo da integração Kommo.
+- `KOMMO_CHAT_SCOPE_ID` — opcional; scope ID do canal da Chats API para ler histórico de Talks.
+- `KOMMO_CHAT_SECRET` — opcional; secret do canal da Chats API usado para assinar requests.
 
 Após configurar, abra a aba **Actions**, selecione **Kommo Lead Analysis** e clique em **Run workflow**. O relatório `kommo_analysis.md` estará disponível como artifact ao final da execução.
 
