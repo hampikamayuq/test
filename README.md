@@ -14,22 +14,25 @@ Não usa dependências externas: basta Python 3.10+.
   - **Etapa do funil do bot** — desde "sem interação" até "chegou ao agendamento" ou "fallback para equipe".
 - Calcula sinais de compra, objeções, urgência, sentimento negativo e tempo sem resposta.
 - Ordena leads por urgência: vencidos sem resposta → sem resposta → score de prioridade.
-- Gera relatório completo em `Markdown` (com ID do lead em cada linha), `JSON` ou `CSV`.
+- Gera relatório completo em `Markdown`, `HTML` interativo (gráficos Chart.js), `JSON` ou `CSV`.
 
 ## Relatório gerado
 
-O relatório Markdown inclui:
+O relatório inclui (Markdown e HTML):
 
-1. **Visão Geral** — totais, leads sem resposta, tempo médio de resposta.
+1. **Visão Geral** — totais, leads sem resposta, tempo médio de resposta e primeira resposta.
 2. **Canal de Captação** — distribuição por origem com percentual.
 3. **Por Especialidade** — leads, quantos agendaram e taxa de conversão por especialidade.
 4. **Por Unidade** — distribuição por cidade.
 5. **Funil do Bot** — quantos leads chegaram a cada etapa.
-6. **⚠️ Urgente** — leads vencidos sem resposta com ID, especialidade, cidade e horas de espera.
-7. **📬 Aguardando Resposta** — leads sem resposta ainda dentro do prazo.
-8. **Top Prioridades** — tabela completa com ID, canal, especialidade, cidade, etapa do bot, score e recomendação.
+6. **Tipo de Pagamento** — convênio vs. particular (quando mencionado).
+7. **Distribuição Temporal** — leads por hora (UTC) e por dia da semana.
+8. **⚠️ Urgente** — leads vencidos sem resposta com ID, especialidade, cidade e horas de espera.
+9. **🔔 Tarefa Vencida** — leads com tarefa do Kommo atrasada.
+10. **📬 Aguardando Resposta** — leads sem resposta ainda dentro do prazo.
+11. **Top Prioridades** — tabela completa com ID, canal, especialidade, cidade, etapa do bot, score e recomendação.
 
-O **ID do lead** aparece em destaque em todas as tabelas para facilitar a busca direta no Kommo.
+O **HTML** usa **Chart.js** com gráficos interativos de rosca (canal, cidade), barras horizontais (especialidade, funil) e barras verticais (hora, dia). O **ID do lead** aparece em destaque em todas as tabelas para facilitar a busca direta no Kommo.
 
 ## Uso com arquivos exportados
 
@@ -38,6 +41,16 @@ python3 kommo_lead_analyzer.py \
   --leads-file examples/leads.json \
   --messages-file examples/messages.json \
   --output kommo_analysis.md
+```
+
+Gerar HTML interativo (Chart.js):
+
+```bash
+python3 kommo_lead_analyzer.py \
+  --leads-file examples/leads.json \
+  --messages-file examples/messages.json \
+  --format html \
+  --output relatorio.html
 ```
 
 Gerar CSV:
@@ -69,6 +82,26 @@ python3 kommo_lead_analyzer.py \
 
 O `KOMMO_ACCESS_TOKEN` permite buscar leads, notas e a lista de Talks pela API v4. Para ler o histórico de mensagens de cada Talk, a Kommo usa a **Chats API** (`amojo.kommo.com`), que exige assinatura com `scope_id` e `secret` do canal. Se `KOMMO_CHAT_SCOPE_ID` e `KOMMO_CHAT_SECRET` não estiverem configurados, a ferramenta pula as mensagens de Talks e mostra um aviso no log.
 
+Gerar HTML a partir da API:
+
+```bash
+python3 kommo_lead_analyzer.py \
+  --from-api \
+  --format html \
+  --output relatorio.html
+```
+
+Re-renderizar sem chamar a API novamente (útil para mudar o formato):
+
+```bash
+# Gera o JSON uma vez
+python3 kommo_lead_analyzer.py --from-api --format json --output analise.json
+
+# Re-renderiza em HTML e Markdown sem nova chamada à API
+python3 kommo_lead_analyzer.py --from-report analise.json --format html --output relatorio.html
+python3 kommo_lead_analyzer.py --from-report analise.json --format markdown --output relatorio.md
+```
+
 Filtrar por período:
 
 ```bash
@@ -85,13 +118,16 @@ python3 kommo_lead_analyzer.py \
 | --- | --- | --- |
 | `--leads-file` | — | Arquivo JSON/CSV com leads exportados. Mutuamente exclusivo com `--from-api`. |
 | `--from-api` | — | Busca leads e notas pela API do Kommo. |
+| `--from-report` | — | Lê um relatório JSON gerado anteriormente e re-renderiza sem chamar a API. |
 | `--messages-file` | — | Arquivo JSON/CSV com mensagens/notas. Obrigatório com `--leads-file`. |
 | `--output` | `kommo_analysis.md` | Caminho do arquivo de saída. |
-| `--format` | `markdown` | Formato: `markdown`, `json` ou `csv`. |
+| `--format` | `markdown` | Formato: `markdown`, `html`, `json` ou `csv`. |
 | `--stale-hours` | `48` | Horas sem resposta para considerar o lead "vencido". |
 | `--top-n` | `30` | Número de leads exibidos nas tabelas do relatório. |
 | `--filter-from` | — | Data ISO 8601 de início do filtro (só com `--from-api`). Ex: `2026-01-01`. |
 | `--filter-to` | — | Data ISO 8601 de fim do filtro (só com `--from-api`). Ex: `2026-12-31`. |
+| `--no-delta` | — | Desativa o relatório delta (não lê nem salva snapshot anterior). |
+| `--probe` | — | Modo diagnóstico: inspeciona endpoints da API para 1 lead (requer `--from-api`). |
 
 ## Rodar automaticamente com GitHub Actions
 
@@ -99,12 +135,21 @@ O workflow `.github/workflows/kommo-analysis.yml` executa a análise manualmente
 
 Configure estes secrets em **Settings → Secrets and variables → Actions**:
 
-- `KOMMO_SUBDOMAIN` — subdomínio da conta, sem `https://` e sem `.kommo.com`.
-- `KOMMO_ACCESS_TOKEN` — token de acesso ativo da integração Kommo.
-- `KOMMO_CHAT_SCOPE_ID` — opcional; scope ID do canal da Chats API para ler histórico de Talks.
-- `KOMMO_CHAT_SECRET` — opcional; secret do canal da Chats API usado para assinar requests.
+| Secret | Obrigatório | Descrição |
+| --- | --- | --- |
+| `KOMMO_SUBDOMAIN` | ✅ | Subdomínio da conta, sem `https://` e sem `.kommo.com`. |
+| `KOMMO_ACCESS_TOKEN` | ✅ | Token de acesso ativo da integração Kommo. |
+| `KOMMO_CHAT_SCOPE_ID` | — | Scope ID do canal da Chats API para ler histórico de Talks via WhatsApp. |
+| `KOMMO_CHAT_SECRET` | — | Secret do canal da Chats API (par com `KOMMO_CHAT_SCOPE_ID`). |
+| `SLACK_WEBHOOK_URL` | — | URL do Incoming Webhook do Slack para notificação automática ao final. |
 
-Após configurar, abra a aba **Actions**, selecione **Kommo Lead Analysis** e clique em **Run workflow**. O relatório `kommo_analysis.md` estará disponível como artifact ao final da execução.
+Após configurar, abra a aba **Actions**, selecione **Kommo Lead Analysis** e clique em **Run workflow**.
+
+O workflow:
+1. Chama a API do Kommo **uma única vez** e salva o JSON.
+2. Re-renderiza o Markdown e o HTML a partir do JSON (sem nova chamada à API).
+3. Envia notificação no Slack (se `SLACK_WEBHOOK_URL` estiver configurado).
+4. Disponibiliza **dois artifacts**: `kommo-analysis-markdown` e `kommo-analysis-html`.
 
 > **Segurança:** nunca coloque tokens no código, no README, em exemplos ou em commits. Se um token foi compartilhado em chat ou commit, revogue no Kommo e gere outro antes de salvar nos secrets do GitHub.
 
