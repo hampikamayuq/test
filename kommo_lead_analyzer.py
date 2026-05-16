@@ -1100,6 +1100,71 @@ def fetch_overdue_task_lead_ids(subdomain: str, token: str) -> set[str]:
     return lead_ids
 
 
+def build_contact_lead_map(leads_raw: list[dict[str, Any]]) -> dict[str, str]:
+    """Return {contact_id: lead_id} from leads fetched with with=contacts.
+
+    Many Kommo WhatsApp integrations (Z-API, Wevo, etc.) attach conversation
+    notes to the Contact record, not the Lead. This map lets us find the right
+    lead when we fetch contacts/notes.
+    """
+    mapping: dict[str, str] = {}
+    for lead in leads_raw:
+        lead_id = str(lead.get("id", "")).strip()
+        if not lead_id:
+            continue
+        embedded = lead.get("_embedded") or {}
+        if not isinstance(embedded, dict):
+            continue
+        for contact in (embedded.get("contacts") or []):
+            if isinstance(contact, dict):
+                cid = str(contact.get("id", "")).strip()
+                if cid:
+                    mapping[cid] = lead_id
+    return mapping
+
+
+def fetch_contact_messages(
+    subdomain: str,
+    token: str,
+    contact_lead_map: dict[str, str],
+    filter_from: int | None = None,
+    filter_to: int | None = None,
+) -> list[Message]:
+    """Fetch notes attached to contacts and translate them to lead messages.
+
+    Needed when the WhatsApp integration (Z-API, native Kommo inbox, etc.)
+    stores chat history on the Contact rather than on the Lead.
+    """
+    if not contact_lead_map:
+        return []
+    try:
+        rows = fetch_kommo_collection(
+            subdomain, token, "contacts/notes",
+            filter_from=filter_from, filter_to=filter_to,
+        )
+    except RuntimeError as exc:
+        print("Aviso: não foi possível buscar notas de contatos: " + str(exc), file=sys.stderr)
+        return []
+
+    messages: list[Message] = []
+    for row in rows:
+        contact_id = str(row.get("entity_id") or "").strip()
+        lead_id = contact_lead_map.get(contact_id)
+        if not lead_id:
+            continue
+        params = row.get("params") if isinstance(row.get("params"), dict) else {}
+        text = normalize_text(first_present(row, TEXT_KEYS) or first_present(params, TEXT_KEYS) or params)
+        direction = infer_direction(row, text)
+        messages.append(Message(
+            lead_id=lead_id,
+            text=text,
+            created_at=parse_timestamp(first_present(row, TIME_KEYS)),
+            direction=direction,
+            raw=row,
+        ))
+    return messages
+
+
 def fetch_talks_messages(
     subdomain: str,
     token: str,
@@ -1118,7 +1183,8 @@ def fetch_talks_messages(
             subdomain, token, "talks",
             filter_from=filter_from, filter_to=filter_to,
         )
-    except RuntimeError:
+    except RuntimeError as exc:
+        print("Aviso: não foi possível buscar talks: " + str(exc), file=sys.stderr)
         return []
 
     if len(talks) > max_talks:
@@ -1267,17 +1333,29 @@ def main(argv: list[str] | None = None) -> int:
         if not subdomain or not token:
             print("Defina KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN para usar --from-api.", file=sys.stderr)
             return 2
-        leads = extract_leads(
-            fetch_kommo_collection(subdomain, token, "leads", filter_from=filter_from, filter_to=filter_to)
+        # Fetch leads with embedded contacts so we can map contact_id → lead_id.
+        # Many WhatsApp integrations (Z-API, Wevo, etc.) attach notes to the
+        # Contact record rather than the Lead.
+        leads_raw = fetch_kommo_collection(
+            subdomain, token, "leads",
+            filter_from=filter_from, filter_to=filter_to,
+            extra_params={"with": "contacts"},
         )
-        messages = extract_messages(
+        leads = extract_leads(leads_raw)
+        contact_lead_map = build_contact_lead_map(leads_raw)
+
+        lead_notes = extract_messages(
             fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
         )
-        # WhatsApp/chatbot messages live in the Talks (Conversations) API, not in notes.
-        # Merge them so the analyzer has full conversation content.
-        talks_messages = fetch_talks_messages(subdomain, token, filter_from=filter_from, filter_to=filter_to)
-        messages.extend(talks_messages)
-        print(f"Mensagens carregadas: {len(messages) - len(talks_messages)} notas + {len(talks_messages)} mensagens de conversa")
+        contact_msgs = fetch_contact_messages(subdomain, token, contact_lead_map, filter_from=filter_from, filter_to=filter_to)
+        talks_msgs = fetch_talks_messages(subdomain, token, filter_from=filter_from, filter_to=filter_to)
+        messages = lead_notes + contact_msgs + talks_msgs
+        print(
+            f"Mensagens carregadas: {len(lead_notes)} notas de leads"
+            f" + {len(contact_msgs)} notas de contatos"
+            f" + {len(talks_msgs)} mensagens de conversa"
+            f" = {len(messages)} total"
+        )
         name_map = fetch_pipeline_names(subdomain, token)
         overdue_task_lead_ids = fetch_overdue_task_lead_ids(subdomain, token)
     else:
