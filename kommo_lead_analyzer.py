@@ -281,6 +281,48 @@ def extract_messages(rows: Iterable[dict[str, Any]]) -> list[Message]:
     return messages
 
 
+def extract_custom_field_messages(leads_raw: Iterable[dict[str, Any]]) -> list[Message]:
+    """Treat each lead's non-empty custom field values as a single incoming message.
+
+    Kommo SalesBot and many WhatsApp integrations store chatbot answers
+    (city, specialty, payment type, etc.) in custom fields rather than notes.
+    Concatenating those values lets the keyword detectors find the right data.
+    """
+    messages: list[Message] = []
+    _SKIP_VALUES = {"none", "null", "false", "0", "-", "n/a", "não informado", "nao informado"}
+    for lead in leads_raw:
+        lead_id = str(lead.get("id", "")).strip()
+        if not lead_id:
+            continue
+        fields = lead.get("custom_fields_values") or []
+        if not isinstance(fields, list):
+            continue
+        parts: list[str] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("field_name") or "").strip()
+            for v in (field.get("values") or []):
+                if isinstance(v, dict):
+                    raw_val = v.get("value")
+                    # enum fields: prefer the enum label when present
+                    enum_val = v.get("enum_value") or (v.get("value") if isinstance(v.get("value"), str) else None)
+                    val = str(enum_val or raw_val or "").strip()
+                else:
+                    val = str(v or "").strip()
+                if val and val.lower() not in _SKIP_VALUES:
+                    parts.append(f"{field_name}: {val}" if field_name else val)
+        if parts:
+            messages.append(Message(
+                lead_id=lead_id,
+                text=" | ".join(parts),
+                created_at=parse_timestamp(lead.get("created_at")),
+                direction="incoming",
+                raw={"_source": "custom_fields"},
+            ))
+    return messages
+
+
 def infer_direction(row: dict[str, Any], text: str) -> str:
     params = row.get("params") if isinstance(row.get("params"), dict) else {}
     note_type_raw = row.get("note_type") or params.get("note_type")
@@ -1349,11 +1391,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         contact_msgs = fetch_contact_messages(subdomain, token, contact_lead_map, filter_from=filter_from, filter_to=filter_to)
         talks_msgs = fetch_talks_messages(subdomain, token, filter_from=filter_from, filter_to=filter_to)
-        messages = lead_notes + contact_msgs + talks_msgs
+        custom_field_msgs = extract_custom_field_messages(leads_raw)
+        messages = lead_notes + contact_msgs + talks_msgs + custom_field_msgs
         print(
             f"Mensagens carregadas: {len(lead_notes)} notas de leads"
             f" + {len(contact_msgs)} notas de contatos"
             f" + {len(talks_msgs)} mensagens de conversa"
+            f" + {len(custom_field_msgs)} campos customizados"
             f" = {len(messages)} total"
         )
         name_map = fetch_pipeline_names(subdomain, token)
