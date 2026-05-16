@@ -1210,42 +1210,58 @@ def fetch_contact_messages(
 def fetch_talks_messages(
     subdomain: str,
     token: str,
-    filter_from: int | None = None,
-    filter_to: int | None = None,
-    max_talks: int = 3000,
+    known_lead_ids: set[str] | None = None,
+    max_talks: int = 5000,
 ) -> list[Message]:
-    """Fetch WhatsApp/chat messages from Kommo Talks (Conversations) API.
+    """Fetch WhatsApp messages from Kommo's native inbox (Talks API).
 
-    Kommo stores WhatsApp Business and chatbot messages in /api/v4/talks,
-    separate from /api/v4/leads/notes. This function fetches them and converts
-    to Message objects so the analyzer can read conversation content.
+    The /api/v4/talks endpoint does not reliably support created_at date
+    filters, so we fetch all talks (paginated) and filter client-side to the
+    leads we care about. Per-talk message calls are only made for matching
+    leads, keeping the total API call count reasonable.
     """
-    try:
-        talks = fetch_kommo_collection(
-            subdomain, token, "talks",
-            filter_from=filter_from, filter_to=filter_to,
-        )
-    except RuntimeError as exc:
-        print("Aviso: não foi possível buscar talks: " + str(exc), file=sys.stderr)
-        return []
+    base_url = "https://" + subdomain + ".kommo.com/api/v4/"
+    url: str = base_url + "talks?limit=250"
+    talks: list[dict[str, Any]] = []
 
-    if len(talks) > max_talks:
-        talks = talks[:max_talks]
+    while url and len(talks) < max_talks:
+        try:
+            raw = _api_request(url, token).decode("utf-8").strip()
+        except RuntimeError as exc:
+            print("Aviso: não foi possível buscar talks: " + str(exc), file=sys.stderr)
+            break
+        if not raw:
+            break
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            break
+        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
+        for v in embedded.values():
+            if isinstance(v, list):
+                talks.extend(t for t in v if isinstance(t, dict))
+                break
+        next_href = (payload.get("_links", {}).get("next", {}).get("href")
+                     if isinstance(payload, dict) else None)
+        url = str(urllib.parse.urljoin(url, next_href)) if next_href else ""
+
+    # Filter to only talks for leads in our current analysis window.
+    if known_lead_ids is not None:
+        talks = [t for t in talks
+                 if str(t.get("entity_id") or "") in known_lead_ids
+                 and str(t.get("entity_type") or "").lower() in ("leads", "lead", "")]
+
+    print(f"Talks encontrados: {len(talks)} conversas para buscar mensagens")
 
     messages: list[Message] = []
-    base_url = "https://" + subdomain + ".kommo.com/api/v4/talks/"
-
     for talk in talks:
         talk_id = str(talk.get("id") or "").strip()
         lead_id = str(talk.get("entity_id") or "").strip()
-        entity_type = str(talk.get("entity_type") or "").lower()
         if not talk_id or not lead_id:
-            continue
-        if entity_type and entity_type not in ("leads", "lead"):
             continue
 
         try:
-            raw = _api_request(base_url + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
+            raw = _api_request(base_url + "talks/" + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
         except RuntimeError:
             continue
         if not raw:
@@ -1274,7 +1290,7 @@ def fetch_talks_messages(
 
             if from_type in ("client", "customer", "contact"):
                 direction = "incoming"
-            elif from_type in ("user", "bot", "amo_bot", "manager", "amo"):
+            elif from_type in ("user", "bot", "amo_bot", "manager", "amo", "salesbot"):
                 direction = "outgoing"
             else:
                 direction = "unknown"
@@ -1390,7 +1406,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
         )
         contact_msgs = fetch_contact_messages(subdomain, token, contact_lead_map, filter_from=filter_from, filter_to=filter_to)
-        talks_msgs = fetch_talks_messages(subdomain, token, filter_from=filter_from, filter_to=filter_to)
+        talks_msgs = fetch_talks_messages(subdomain, token, known_lead_ids=set(leads.keys()))
         custom_field_msgs = extract_custom_field_messages(leads_raw)
         messages = lead_notes + contact_msgs + talks_msgs + custom_field_msgs
         print(
