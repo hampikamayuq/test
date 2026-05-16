@@ -25,6 +25,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+CHAT_HISTORY_ERROR_LOG_LIMIT = 3
+
 # ---------------------------------------------------------------------------
 # Buying intent / objection / urgency / negative sentiment
 # ---------------------------------------------------------------------------
@@ -1409,21 +1411,23 @@ def fetch_talks_messages(
     print(f"Talks total buscados: {len(talks)}", file=sys.stderr)
 
     # Resolve each talk to a lead_id, handling both entity_type values.
-    talk_to_lead: list[tuple[str, str, str]] = []  # [(talk_id, lead_id, chat_id)]
+    talk_to_lead: list[tuple[str, str, str, str, str]] = []  # [(talk_id, lead_id, chat_id, origin, source_id)]
     for t in talks:
         talk_id = str(t.get("talk_id") or t.get("id") or "").strip()
         chat_id = str(t.get("chat_id") or t.get("conversation_id") or "").strip()
+        origin = str(t.get("origin") or "").strip()
+        source_id = str(t.get("source_id") or "").strip()
         entity_id = str(t.get("entity_id") or "").strip()
         entity_type = str(t.get("entity_type") or "").lower()
         if not talk_id or not entity_id:
             continue
         if entity_type in ("leads", "lead", ""):
             if known_lead_ids is None or entity_id in known_lead_ids:
-                talk_to_lead.append((talk_id, entity_id, chat_id))
+                talk_to_lead.append((talk_id, entity_id, chat_id, origin, source_id))
         elif entity_type in ("contacts", "contact"):
             lead_id = (contact_lead_map or {}).get(entity_id)
             if lead_id and (known_lead_ids is None or lead_id in known_lead_ids):
-                talk_to_lead.append((talk_id, lead_id, chat_id))
+                talk_to_lead.append((talk_id, lead_id, chat_id, origin, source_id))
 
     print(f"Talks encontrados: {len(talk_to_lead)} conversas com lead conhecido", file=sys.stderr)
 
@@ -1440,14 +1444,32 @@ def fetch_talks_messages(
 
     messages: list[Message] = []
     missing_chat_ids = 0
-    for talk_id, lead_id, chat_id in talk_to_lead:
+    chat_history_errors = 0
+    for idx, (talk_id, lead_id, chat_id, origin, source_id) in enumerate(talk_to_lead):
         if not chat_id:
             missing_chat_ids += 1
             continue
         try:
             messages.extend(_fetch_chat_history_messages(chat_scope_id, chat_secret, chat_id, lead_id))
         except (RuntimeError, json.JSONDecodeError) as exc:
-            print(f"Aviso: erro ao buscar histórico do talk {talk_id}: {exc}", file=sys.stderr)
+            chat_history_errors += 1
+            print(
+                "Aviso: erro Chats API ao buscar histórico "
+                f"(origin={origin or 'n/d'}, source_id={source_id or 'n/d'}, "
+                f"talk_id={talk_id or 'n/d'}, chat_id={chat_id or 'n/d'}): {exc}",
+                file=sys.stderr,
+            )
+            if chat_history_errors >= CHAT_HISTORY_ERROR_LOG_LIMIT:
+                remaining = len(talk_to_lead) - idx - 1
+                if remaining:
+                    print(
+                        f"Aviso: Chats API retornou {chat_history_errors} erros; "
+                        f"pulando {remaining} talks restantes para evitar logs repetidos. "
+                        "Confirme se KOMMO_CHAT_SCOPE_ID/KOMMO_CHAT_SECRET pertencem "
+                        "ao origin/source_id desses Talks.",
+                        file=sys.stderr,
+                    )
+                break
     if missing_chat_ids:
         print(f"Aviso: {missing_chat_ids} talks sem chat_id para histórico da Chats API", file=sys.stderr)
     return messages
@@ -1588,6 +1610,28 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
         print("=" * 70)
         print(json.dumps(data, ensure_ascii=False, indent=2)[:4000])
 
+    source_ids: set[str] = set()
+    chat_history_diagnostic: dict[str, Any] | None = None
+
+    def remember_talks(payload: Any) -> list[dict[str, Any]]:
+        remembered: list[dict[str, Any]] = []
+        if not isinstance(payload, dict):
+            return remembered
+        embedded = payload.get("_embedded", {})
+        if not isinstance(embedded, dict):
+            return remembered
+        for value in embedded.values():
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                source_id = str(item.get("source_id") or "").strip()
+                if source_id:
+                    source_ids.add(source_id)
+                remembered.append(item)
+        return remembered
+
     lead = _probe_get(subdomain, token, f"leads/{lead_id}?with=contacts,custom_fields")
     show(f"GET /api/v4/leads/{lead_id}?with=contacts,custom_fields", lead)
 
@@ -1606,19 +1650,24 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
         show(f"GET /api/v4/contacts/{cid}/notes",
              _probe_get(subdomain, token, f"contacts/{cid}/notes?limit=50"))
 
-    show(f"GET /api/v4/talks?filter[entity_id]={lead_id}&filter[entity_type]=leads",
-         _probe_get(subdomain, token, f"talks?filter[entity_id]={lead_id}&filter[entity_type]=leads"))
+    lead_talks = _probe_get(subdomain, token, f"talks?filter[entity_id]={lead_id}&filter[entity_type]=leads")
+    show(f"GET /api/v4/talks?filter[entity_id]={lead_id}&filter[entity_type]=leads", lead_talks)
+    remember_talks(lead_talks)
     for cid in contact_ids[:1]:
-        show(f"GET /api/v4/talks?filter[entity_id]={cid}&filter[entity_type]=contacts",
-             _probe_get(subdomain, token, f"talks?filter[entity_id]={cid}&filter[entity_type]=contacts"))
+        contact_talks = _probe_get(subdomain, token, f"talks?filter[entity_id]={cid}&filter[entity_type]=contacts")
+        show(f"GET /api/v4/talks?filter[entity_id]={cid}&filter[entity_type]=contacts", contact_talks)
+        remember_talks(contact_talks)
 
     talks_any = _probe_get(subdomain, token, "talks?limit=3")
     show("GET /api/v4/talks?limit=3 (amostra geral)", talks_any)
+    remember_talks(talks_any)
     if isinstance(talks_any, dict):
         for t in (talks_any.get("_embedded", {}) or {}).get("talks", []) or []:
             if isinstance(t, dict) and (t.get("talk_id") or t.get("id")):
                 tid = str(t.get("talk_id") or t["id"])
                 chat_id = str(t.get("chat_id") or t.get("conversation_id") or "").strip()
+                origin = str(t.get("origin") or "").strip()
+                source_id = str(t.get("source_id") or "").strip()
                 show(f"GET /api/v4/talks/{tid}",
                      _probe_get(subdomain, token, f"talks/{tid}"))
                 if chat_id:
@@ -1638,13 +1687,36 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
                                 chat_secret,
                                 query={"offset": 0, "limit": 10},
                             ).decode("utf-8", errors="replace").strip()
+                            chat_history_diagnostic = {
+                                "status": "ok",
+                                "talk_id": tid,
+                                "chat_id": chat_id,
+                                "origin": origin or None,
+                                "source_id": source_id or None,
+                            }
                             show(
                                 "GET https://amojo.kommo.com" + history_path + "?offset=0&limit=10",
                                 json.loads(raw) if raw else {"__empty_body__": True},
                             )
                         except (RuntimeError, json.JSONDecodeError) as exc:
+                            chat_history_diagnostic = {
+                                "status": "error",
+                                "talk_id": tid,
+                                "chat_id": chat_id,
+                                "origin": origin or None,
+                                "source_id": source_id or None,
+                                "error": str(exc),
+                            }
                             show("Chats API history error", {"__error__": str(exc)})
                     else:
+                        chat_history_diagnostic = {
+                            "status": "skipped",
+                            "talk_id": tid,
+                            "chat_id": chat_id,
+                            "origin": origin or None,
+                            "source_id": source_id or None,
+                            "required_secrets": ["KOMMO_CHAT_SCOPE_ID", "KOMMO_CHAT_SECRET"],
+                        }
                         show(
                             "Chats API history skipped",
                             {
@@ -1654,8 +1726,31 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
                         )
                 break
 
+    def sort_source_id(value: str) -> tuple[int, str]:
+        return (0, f"{int(value):020d}") if value.isdigit() else (1, value)
+
+    for source_id in sorted(source_ids, key=sort_source_id)[:5]:
+        show(f"GET /api/v4/sources/{source_id}", _probe_get(subdomain, token, f"sources/{source_id}"))
+
     show("GET /api/v4/account?with=amojo_id (verifica acesso a chats)",
          _probe_get(subdomain, token, "account?with=amojo_id,amojo_rights"))
+
+    diagnostic: dict[str, Any] = {
+        "source_ids_found": sorted(source_ids, key=sort_source_id),
+        "chat_api_configured": bool(
+            os.getenv("KOMMO_CHAT_SCOPE_ID", "").strip()
+            and os.getenv("KOMMO_CHAT_SECRET", "").strip()
+        ),
+        "sample_chat_history": chat_history_diagnostic or {"status": "not_tested"},
+    }
+    sample_error = str((chat_history_diagnostic or {}).get("error", ""))
+    if "HTTP 404" in sample_error:
+        diagnostic["next_step"] = (
+            "Confirmar com Kommo qual KOMMO_CHAT_SCOPE_ID/KOMMO_CHAT_SECRET pertence "
+            "ao source_id/origin destes Talks, ou se este origin nao permite historico "
+            "via origin/custom/{scope_id}."
+        )
+    show("PROBE DIAGNOSTICO FINAL", diagnostic)
 
     print("\n" + "=" * 70)
     print("FIM DO PROBE — copie TODO este output e cole de volta para análise.")
