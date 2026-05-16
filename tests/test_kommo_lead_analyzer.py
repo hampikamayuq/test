@@ -270,7 +270,7 @@ class ComputeFirstResponseTest(unittest.TestCase):
 # fetch_talks_messages()
 # ---------------------------------------------------------------------------
 
-class FetchTalksMessagesTest(unittest.TestCase):
+class FetchTalksMessagesChatApiTest(unittest.TestCase):
     def test_chat_api_headers_sign_empty_get_body(self):
         path = "/v2/origin/custom/scope-id/chats/chat-abc/history"
         date = "Thu, 01 Jan 2026 12:00:00 +0000"
@@ -661,7 +661,8 @@ class RenderHtmlTest(unittest.TestCase):
 
     def test_contains_bar_chart_elements(self):
         html = render_html(self._make_report())
-        self.assertIn("class='bar'", html)
+        self.assertIn("<canvas id=", html)
+        self.assertIn("chart.js", html.lower())
 
     def test_contains_summary_cards(self):
         html = render_html(self._make_report())
@@ -924,6 +925,51 @@ class CliTest(unittest.TestCase):
             )
             snapshot_path = tmp_path / "out.md.snapshot.json"
             self.assertFalse(snapshot_path.exists())
+
+
+class FetchTalksMessagesFallbackTest(unittest.TestCase):
+    def test_embedded_talks_list_debug_does_not_crash_and_uses_talk_id(self):
+        """Without Chats API credentials, fetch_talks_messages returns [] and does not
+        call the Talk messages endpoint (fallback was removed in favour of explicit
+        credential check so callers can control the behaviour via env vars)."""
+        import kommo_lead_analyzer as analyzer
+
+        original_api_request = analyzer._api_request
+        requested_urls = []
+
+        def fake_api_request(url, token, timeout=30, max_retries=4):
+            requested_urls.append(url)
+            if url.endswith("talks?limit=250"):
+                return json.dumps({
+                    "_embedded": {
+                        "talks": [
+                            {
+                                "talk_id": "talk-1",
+                                "id": "legacy-id",
+                                "entity_id": "lead-1",
+                                "entity_type": "leads",
+                            }
+                        ]
+                    }
+                }).encode("utf-8")
+            raise AssertionError("unexpected URL: " + url)
+
+        analyzer._api_request = fake_api_request
+        try:
+            # No KOMMO_CHAT_SCOPE_ID / KOMMO_CHAT_SECRET → should return [] without crashing.
+            messages = fetch_talks_messages(
+                "clinic", "token",
+                known_lead_ids={"lead-1"},
+                chat_scope_id="",
+                chat_secret="",
+            )
+        finally:
+            analyzer._api_request = original_api_request
+
+        self.assertEqual(messages, [])
+        # Must NOT have hit the Talk messages endpoint.
+        self.assertFalse(any("messages" in url for url in requested_urls))
+        self.assertFalse(any("talks/legacy-id/messages" in url for url in requested_urls))
 
 
 if __name__ == "__main__":

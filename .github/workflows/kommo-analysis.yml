@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
   schedule:
-    # Runs every day at 12:00 UTC. Adjust if you need another timezone.
+    # Runs every day at 12:00 UTC.
     - cron: "0 12 * * *"
 
 permissions:
@@ -24,6 +24,7 @@ jobs:
       KOMMO_ACCESS_TOKEN: ${{ secrets.KOMMO_ACCESS_TOKEN }}
       KOMMO_CHAT_SCOPE_ID: ${{ secrets.KOMMO_CHAT_SCOPE_ID }}
       KOMMO_CHAT_SECRET: ${{ secrets.KOMMO_CHAT_SECRET }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
@@ -53,6 +54,7 @@ jobs:
         id: filter-date
         run: echo "date=$(date -d '90 days ago' '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
+      # ── Diagnóstico ────────────────────────────────────────────────────────
       - name: Run API probe (diagnóstico)
         if: ${{ github.event.inputs.probe_lead_id != '' }}
         run: |
@@ -60,7 +62,8 @@ jobs:
             --from-api \
             --probe "${{ github.event.inputs.probe_lead_id }}"
 
-      - name: Run Kommo analysis
+      # ── Relatório normal ───────────────────────────────────────────────────
+      - name: Run Kommo analysis → JSON
         if: ${{ github.event.inputs.probe_lead_id == '' }}
         run: |
           python kommo_lead_analyzer.py \
@@ -68,11 +71,86 @@ jobs:
             --stale-hours 48 \
             --top-n 30 \
             --filter-from "${{ steps.filter-date.outputs.date }}" \
+            --format json \
+            --output kommo_analysis.json
+
+      - name: Render Markdown from JSON
+        if: ${{ github.event.inputs.probe_lead_id == '' }}
+        run: |
+          python kommo_lead_analyzer.py \
+            --from-report kommo_analysis.json \
+            --format markdown \
             --output kommo_analysis.md
 
-      - name: Upload report artifact
+      - name: Render HTML from JSON
+        if: ${{ github.event.inputs.probe_lead_id == '' }}
+        run: |
+          python kommo_lead_analyzer.py \
+            --from-report kommo_analysis.json \
+            --format html \
+            --output kommo_analysis.html
+
+      # ── Notificação Slack (opcional — configure SLACK_WEBHOOK_URL nos secrets) ──
+      - name: Send Slack notification
+        if: ${{ github.event.inputs.probe_lead_id == '' && env.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          python - <<'PYEOF'
+          import json, os, urllib.request
+
+          with open("kommo_analysis.json", encoding="utf-8") as f:
+              report = json.load(f)
+
+          s = report["summary"]
+          total     = s["total_leads"]
+          unanswered = s["unanswered_leads"]
+          stale     = s["stale_unanswered_leads"]
+          overdue   = s.get("overdue_task_leads", 0)
+          generated = report.get("generated_at", "")
+
+          lines = [
+              f":bar_chart: *Análise Kommo — Clínica QARA*",
+              f"_{generated}_",
+              "",
+              f"*{total}* leads analisados  |  *{unanswered}* aguardando resposta",
+          ]
+          if stale:
+              lines.append(f":warning: *{stale}* leads vencidos sem resposta")
+          if overdue:
+              lines.append(f":bell: *{overdue}* leads com tarefa vencida")
+
+          top3 = [r for r in report["leads"] if r["stale_unanswered"]][:3]
+          if top3:
+              lines.append("")
+              lines.append("*Top urgentes:*")
+              for r in top3:
+                  h = str(r["unanswered_hours"]) + "h" if r.get("unanswered_hours") else "?"
+                  lines.append(f"  • `{r['lead_id']}` {r['name']} — {r.get('specialty_label') or '—'} — {h} sem resposta")
+
+          payload = json.dumps({"text": "\n".join(lines)}).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["SLACK_WEBHOOK_URL"],
+              data=payload,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              urllib.request.urlopen(req, timeout=10)
+              print("Slack notification sent.")
+          except Exception as exc:
+              print(f"Slack notification failed (non-fatal): {exc}")
+          PYEOF
+
+      # ── Artifacts ─────────────────────────────────────────────────────────
+      - name: Upload Markdown report
         if: ${{ github.event.inputs.probe_lead_id == '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: kommo-analysis-report
+          name: kommo-analysis-markdown
           path: kommo_analysis.md
+
+      - name: Upload HTML report
+        if: ${{ github.event.inputs.probe_lead_id == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kommo-analysis-html
+          path: kommo_analysis.html

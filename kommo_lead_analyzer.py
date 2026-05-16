@@ -57,16 +57,70 @@ NEGATIVE_KEYWORDS = {
 # ---------------------------------------------------------------------------
 
 SPECIALTY_KEYWORDS: dict[str, list[str]] = {
-    "unhas":             ["ceccarelli", "doença de unha", "doenças de unha", "onicomicose", "micose de unha", "fungo na unha", "encravada"],
-    "cabelo":            ["stohmann", "tricologia", "transplante capilar", "queda de cabelo", "alopecia", "calvície", "calvicie"],
-    "cirurgia_derm":     ["galvez", "cirurgia dermatológica", "cirurgia dermatologica", "nevo", "melanoma", "carcinoma", "biópsia", "biopsia"],
-    "psoriase":          ["psoríase", "psoriase"],
-    "dermatite_atopica": ["dermatite atópica", "dermatite atopica", "eczema atópico", "eczema atopico"],
-    "hidradenite":       ["hidradenite", "hidrosadenite"],
-    "auto_inflamatoria": ["manuela", "doenças autoinflamatórias", "doença autoinflamatória", "autoinflamatória"],
-    "dermatopediatria":  ["dermatopediatria", "dermatologia infantil", "pediatria"],
-    "estetica":          ["botox", "peeling", "laser estético", "harmonização", "harmonizacao", "preenchimento"],
-    "pele_geral":        ["acne", "espinha", "mancha na pele", "dermatologia geral"],
+    "unhas": [
+        "ceccarelli", "dr. miguel", "dr miguel", "doutor miguel",
+        "doença de unha", "doenças de unha", "onicomicose", "micose de unha", "micose nas unhas",
+        "fungo na unha", "fungo nas unhas", "encravada", "unha encravada", "unhas encravadas",
+        "paroniquia", "onicólise", "onicolise", "unha amarela", "unha quebrando", "unha fraca",
+    ],
+    "cabelo": [
+        "stohmann", "dra. diana", "dra diana", "doutora diana",
+        "tricologia", "transplante capilar", "queda de cabelo", "queda capilar",
+        "alopecia", "calvície", "calvicie", "fio quebrando", "cabelo fraco",
+        "alopecia areata", "effluvium", "eflúvio", "efflúvio", "dermatite seborreica no couro",
+        "caspa intensa", "couro cabeludo", "perda capilar",
+    ],
+    "cirurgia_derm": [
+        "galvez", "dr. diego", "dr diego", "doutor diego",
+        "cirurgia dermatológica", "cirurgia dermatologica",
+        "nevo", "nevo melanocítico", "melanoma", "carcinoma", "carcinoma basocelular",
+        "carcinoma espinocelular", "biópsia", "biopsia", "excisão", "excisao",
+        "ceratose", "pinta suspeita", "mancha suspeita", "lesão na pele", "lesao na pele",
+        "caroço na pele", "caroco na pele", "tumor de pele", "cirurgia de pele",
+    ],
+    "psoriase": [
+        "psoríase", "psoriase", "psoriasis",
+        "placa vermelha descamando", "placas vermelhas", "pele descamando em placas",
+        "descamação na pele", "psoríase em placas",
+    ],
+    "dermatite_atopica": [
+        "dermatite atópica", "dermatite atopica", "eczema atópico", "eczema atopico",
+        "dermatite", "eczema", "atopia", "pele com coceira intensa", "coceira intensa",
+        "alergia na pele", "prurido", "pele ressecada com coceira",
+    ],
+    "hidradenite": [
+        "hidradenite", "hidrosadenite", "hidradenite supurativa",
+        "nódulo na axila", "nodulo na axila", "nódulos na axila", "abscesso na axila",
+        "abscesso recorrente", "furúnculo recorrente", "furunculo recorrente",
+        "nódulos na virilha", "nodulos na virilha",
+    ],
+    "auto_inflamatoria": [
+        "manuela", "manuela pedretti", "dra. manuela", "dra manuela", "doutora manuela",
+        "doenças autoinflamatórias", "doença autoinflamatória", "autoinflamatória",
+        "doenças autoinflamatorias", "doenca autoinflamatoria", "autoinflamatoria",
+        "doença inflamatória sistêmica", "inflamação sistêmica",
+    ],
+    "dermatopediatria": [
+        "dermatopediatria", "dermatologia infantil", "pediatria",
+        "criança com", "filho com", "filha com", "bebê com", "bebe com",
+        "dermatite no bebê", "manchinha no bebê", "alergia no bebê", "dermatologista infantil",
+        "criança de", "filho de", "recém-nascido",
+    ],
+    "estetica": [
+        "botox", "toxina botulínica", "toxina botulinica",
+        "peeling", "laser estético", "laser estetico", "laser",
+        "harmonização", "harmonizacao", "preenchimento",
+        "ácido hialurônico", "acido hialuronico", "bioestimulador", "skinbooster",
+        "microagulhamento", "fio de sustentação", "fio de sustentacao",
+        "rejuvenescimento", "lifting", "manchas por laser",
+    ],
+    "pele_geral": [
+        "acne", "espinha", "cravos", "mancha na pele", "manchas", "melasma",
+        "dermatologia geral", "dermatologista", "consulta de pele", "consulta dermatológica",
+        "quero consulta", "preciso de dermatologista", "rosacea", "rosácea",
+        "urticária", "urticaria", "vitiligo", "herpes", "coceira", "pele oleosa",
+        "pele sensível", "alergia", "vermelhidão", "vermelhidao",
+    ],
 }
 
 SPECIALTY_LABELS: dict[str, str] = {
@@ -83,9 +137,24 @@ SPECIALTY_LABELS: dict[str, str] = {
 }
 
 SOURCE_KEYWORDS: dict[str, list[str]] = {
-    "instagram": ["instagram"],
-    "anuncio":   ["anúncio", "anuncio", "através do anúncio", "atraves do anuncio"],
-    "pagina":    ["pela página", "pela pagina", "pelo site", "pela page"],
+    "instagram": [
+        "instagram", "insta", "pelo insta", "pelo instagram",
+        "vi no instagram", "stories", "reels", "feed do instagram",
+        "post do instagram", "instagram da clínica", "instagram da clinica",
+    ],
+    "anuncio": [
+        "anúncio", "anuncio", "através do anúncio", "atraves do anuncio",
+        "vi um anúncio", "vi um anuncio", "propaganda", "publicidade", "patrocinado",
+        "sponsored", "anúncio no facebook", "anuncio no facebook",
+        "anúncio no google", "anuncio no google", "google ads", "trafego pago",
+        "tráfego pago", "utm_source", "utm_medium=cpc", "utm_medium=paid",
+        "link patrocinado",
+    ],
+    "pagina": [
+        "pela página", "pela pagina", "pelo site", "pela page", "website",
+        "pela internet", "no google", "busquei no google", "pesquisei no google",
+        "encontrei no google", "site de vocês", "site de voces", "busca",
+    ],
 }
 SOURCE_LABELS: dict[str, str] = {
     "instagram": "Instagram",
@@ -95,9 +164,19 @@ SOURCE_LABELS: dict[str, str] = {
 }
 
 CITY_KEYWORDS: dict[str, list[str]] = {
-    "Copacabana":      ["copacabana", "santa clara"],
-    "Barra da Tijuca": ["barra da tijuca"],
-    "São Paulo":       ["são paulo", "sao paulo", "itaim", "joaquim floriano"],
+    "Copacabana": [
+        "copacabana", "santa clara", "rua santa clara", "posto 6", "posto seis",
+        "unidade copacabana", "copa", "perto de copacabana",
+    ],
+    "Barra da Tijuca": [
+        "barra da tijuca", "barra tijuca", "na barra", "unidade barra",
+        "downtown", "américas", "americas", "barra shopping",
+    ],
+    "São Paulo": [
+        "são paulo", "sao paulo", "itaim", "itaim bibi", "joaquim floriano",
+        "faria lima", "paulista", "jardins", "pinheiros", "em sp", "em são paulo",
+        "unidade sp", "unidade são paulo",
+    ],
 }
 
 PAYMENT_KEYWORDS: dict[str, list[str]] = {
@@ -370,12 +449,12 @@ def _match_keywords(text_lower: str, catalog: dict[str, list[str]]) -> str | Non
 
 
 def detect_source(messages: list[Message]) -> str:
-    first = next((m for m in messages if m.direction == "incoming"), None)
-    if first:
-        low = first.text.lower()
-        match = _match_keywords(low, SOURCE_KEYWORDS)
-        if match:
-            return match
+    # Scan all incoming messages so UTM data stored in custom fields is found.
+    for msg in messages:
+        if msg.direction == "incoming":
+            match = _match_keywords(msg.text.lower(), SOURCE_KEYWORDS)
+            if match:
+                return match
     return "direto"
 
 
@@ -848,7 +927,7 @@ def format_seconds(seconds: float | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Report rendering — HTML
+# Report rendering — HTML (Chart.js)
 # ---------------------------------------------------------------------------
 
 def render_html(report: dict[str, Any], top_n: int = 30) -> str:
@@ -856,125 +935,189 @@ def render_html(report: dict[str, Any], top_n: int = 30) -> str:
     generated = report.get("generated_at", "")
     all_leads = report["leads"]
 
-    def _bar_chart(data: dict[str, int], title: str) -> str:
-        if not data:
-            return ""
-        max_val = max(data.values()) or 1
-        rows = ""
-        for label, val in sorted(data.items(), key=lambda x: -x[1]):
-            pct = int(val / max_val * 100)
-            rows += (
-                "<tr><td class='bl'>" + _esc(label) + "</td>"
-                "<td class='bv'><div class='bar' style='width:" + str(pct) + "%'></div></td>"
-                "<td class='bn'>" + str(val) + "</td></tr>\n"
-            )
-        return "<h2>" + _esc(title) + "</h2><table class='chart'>\n" + rows + "</table>\n"
+    def _esc(s: Any) -> str:
+        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
-    def _esc(s: str) -> str:
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-    def _lead_table(leads_subset: list[dict[str, Any]], section_title: str) -> str:
-        if not leads_subset:
-            return ""
-        rows = ""
-        for r in leads_subset:
-            stale_cls = " stale" if r["stale_unanswered"] else (" unanswered" if r["unanswered"] else "")
-            task_flag = " 🔔" if r.get("has_overdue_task") else ""
-            hours = str(r["unanswered_hours"]) + "h" if r.get("unanswered_hours") else "—"
-            pgto = {"convenio": "Conv.", "particular": "Part."}.get(r.get("payment_type", ""), "—")
-            delta = r.get("delta_bot_stage")
-            delta_str = ("+" + str(delta) if delta and delta > 0 else str(delta) if delta is not None else "—")
-            rows += (
-                "<tr class='" + stale_cls.strip() + "'>"
-                "<td><code>" + _esc(r["lead_id"]) + "</code></td>"
-                "<td>" + _esc(r["name"] or r["lead_id"]) + task_flag + "</td>"
-                "<td>" + _esc(SOURCE_LABELS.get(r.get("source", ""), r.get("source", "—") or "—")) + "</td>"
-                "<td>" + _esc(r.get("specialty_label") or "—") + "</td>"
-                "<td>" + _esc(r.get("city") or "—") + "</td>"
-                "<td>" + _esc(r.get("bot_stage_label") or "—") + "</td>"
-                "<td>" + delta_str + "</td>"
-                "<td>" + pgto + "</td>"
-                "<td>" + str(r["messages"]) + "</td>"
-                "<td>" + hours + "</td>"
-                "<td><strong>" + str(r["priority_score"]) + "</strong></td>"
-                "<td>" + _esc(r["recommendation"]) + "</td>"
-                "</tr>\n"
-            )
-        hdr = (
-            "<tr><th>ID</th><th>Lead</th><th>Canal</th><th>Especialidade</th>"
-            "<th>Cidade</th><th>Etapa Bot</th><th>Δ</th><th>Pgto</th>"
-            "<th>Msgs</th><th>Sem resp.</th><th>Score</th><th>Recomendação</th></tr>\n"
+    def _lead_row(r: dict[str, Any]) -> str:
+        stale_cls = "stale" if r["stale_unanswered"] else ("unanswered" if r["unanswered"] else "")
+        task_flag = " 🔔" if r.get("has_overdue_task") else ""
+        hours = (str(r["unanswered_hours"]) + "h") if r.get("unanswered_hours") else "—"
+        pgto = {"convenio": "Convênio", "particular": "Particular"}.get(r.get("payment_type", ""), "—")
+        delta = r.get("delta_bot_stage")
+        if delta and delta > 0:
+            delta_html = "<span class='up'>+" + str(delta) + "</span>"
+        elif delta and delta < 0:
+            delta_html = "<span class='dn'>" + str(delta) + "</span>"
+        else:
+            delta_html = "—"
+        score = r["priority_score"]
+        score_cls = "hi" if score >= 70 else ("md" if score >= 40 else "lo")
+        return (
+            "<tr class='" + stale_cls + "'>"
+            + "<td><code>" + _esc(r["lead_id"]) + "</code></td>"
+            + "<td>" + _esc(r["name"] or r["lead_id"]) + _esc(task_flag) + "</td>"
+            + "<td>" + _esc(SOURCE_LABELS.get(r.get("source", ""), r.get("source") or "—")) + "</td>"
+            + "<td>" + _esc(r.get("specialty_label") or "—") + "</td>"
+            + "<td>" + _esc(r.get("city") or "—") + "</td>"
+            + "<td>" + _esc(r.get("bot_stage_label") or "—") + "</td>"
+            + "<td>" + delta_html + "</td>"
+            + "<td>" + _esc(pgto) + "</td>"
+            + "<td>" + str(r["messages"]) + "</td>"
+            + "<td>" + _esc(hours) + "</td>"
+            + "<td><span class='score " + score_cls + "'>" + str(score) + "</span></td>"
+            + "<td class='rec'>" + _esc(r["recommendation"]) + "</td>"
+            + "</tr>\n"
         )
-        return "<h2>" + _esc(section_title) + "</h2><table class='leads'>\n" + hdr + rows + "</table>\n"
 
-    css = """
-body{font-family:system-ui,sans-serif;max-width:1400px;margin:0 auto;padding:16px;color:#1a1a1a}
-h1{color:#2c5f2e}h2{color:#374151;border-bottom:2px solid #e5e7eb;padding-bottom:4px}
-.cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
-.card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px 20px;min-width:160px}
-.card .val{font-size:2rem;font-weight:700;color:#2c5f2e}
-.card .lbl{font-size:.85rem;color:#6b7280}
-table{border-collapse:collapse;width:100%;margin-bottom:16px}
-th,td{padding:6px 10px;border:1px solid #e5e7eb;font-size:.85rem}
-th{background:#f3f4f6;font-weight:600}
-table.chart td{border:none;padding:3px 6px}
-.bl{white-space:nowrap;min-width:180px}.bv{width:60%}.bn{text-align:right}
-.bar{background:#2c5f2e;height:16px;border-radius:3px;min-width:4px}
-.stale{background:#fef2f2}.unanswered{background:#fffbeb}
-tr:hover{background:#f0fdf4}
-"""
+    _TBL_HDR = (
+        "<tr><th>ID</th><th>Lead</th><th>Canal</th><th>Especialidade</th>"
+        "<th>Cidade</th><th>Etapa Bot</th><th>Δ</th><th>Pgto</th>"
+        "<th>Msgs</th><th>Sem resp.</th><th>Score</th><th>Recomendação</th></tr>\n"
+    )
 
-    sources_chart = _bar_chart(
-        {SOURCE_LABELS.get(k, k): v for k, v in summary.get("sources", {}).items()},
-        "Canal de Captação",
-    )
-    specialty_chart = _bar_chart(
-        {SPECIALTY_LABELS.get(k, k): v for k, v in summary.get("specialties", {}).items()},
-        "Por Especialidade",
-    )
-    city_chart = _bar_chart(summary.get("cities", {}), "Por Unidade")
-    bot_chart = _bar_chart(summary.get("bot_stages", {}), "Funil do Bot")
-    hour_chart = _bar_chart(
-        {k + "h": v for k, v in summary.get("leads_by_hour", {}).items()},
-        "Leads por Hora (UTC)",
-    )
-    weekday_chart = _bar_chart(summary.get("leads_by_weekday", {}), "Leads por Dia da Semana")
+    def _lead_table(leads_list: list[dict[str, Any]], title: str) -> str:
+        if not leads_list:
+            return ""
+        rows = "".join(_lead_row(r) for r in leads_list)
+        return (
+            "<section><h2>" + _esc(title) + "</h2>"
+            "<div class='tw'><table class='leads'>" + _TBL_HDR + rows + "</table></div></section>\n"
+        )
 
+    # Summary cards
     avg_resp = format_seconds(summary.get("average_response_seconds"))
     avg_first = format_seconds(summary.get("average_first_response_seconds"))
+    cards_html = "<div class='cards'>" + "".join(
+        "<div class='card'><div class='val'>" + _esc(v) + "</div><div class='lbl'>" + _esc(l) + "</div></div>"
+        for v, l in [
+            (str(summary["total_leads"]),              "Total de Leads"),
+            (str(summary["total_messages"]),           "Mensagens"),
+            (str(summary["unanswered_leads"]),         "Sem Resposta"),
+            (str(summary["stale_unanswered_leads"]),   "Vencidos"),
+            (str(summary.get("overdue_task_leads", 0)), "Tarefa Vencida"),
+            (str(summary.get("return_patients", 0)),   "Paciente Retorno"),
+            (avg_resp,                                 "Tempo Méd. Resposta"),
+            (avg_first,                                "1ª Resposta Média"),
+        ]
+    ) + "</div>\n"
 
-    cards_html = (
-        "<div class='cards'>"
-        "<div class='card'><div class='val'>" + str(summary["total_leads"]) + "</div><div class='lbl'>Total de Leads</div></div>"
-        "<div class='card'><div class='val'>" + str(summary["total_messages"]) + "</div><div class='lbl'>Mensagens</div></div>"
-        "<div class='card'><div class='val'>" + str(summary["unanswered_leads"]) + "</div><div class='lbl'>Sem Resposta</div></div>"
-        "<div class='card'><div class='val'>" + str(summary["stale_unanswered_leads"]) + "</div><div class='lbl'>Vencidos</div></div>"
-        "<div class='card'><div class='val'>" + str(summary.get("overdue_task_leads", 0)) + "</div><div class='lbl'>Tarefa Vencida</div></div>"
-        "<div class='card'><div class='val'>" + str(summary.get("return_patients", 0)) + "</div><div class='lbl'>Retorno</div></div>"
-        "<div class='card'><div class='val'>" + avg_resp + "</div><div class='lbl'>Tempo Médio Resposta</div></div>"
-        "<div class='card'><div class='val'>" + avg_first + "</div><div class='lbl'>1ª Resposta Média</div></div>"
-        "</div>"
-    )
+    # Chart.js canvases + JS init blocks
+    _GREEN  = ["#2c5f2e", "#4a9e4e", "#76c478", "#a8d5a2", "#c8e6c9", "#1b5e20", "#388e3c", "#66bb6a"]
+    _BLUE   = ["#1d4ed8", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"]
+    _PURPLE = ["#6d28d9", "#8b5cf6", "#a78bfa", "#c4b5fd"]
+    _ORANGE = ["#c2410c", "#ea580c", "#f97316", "#fb923c", "#fdba74"]
 
-    stale_leads = [r for r in all_leads if r["stale_unanswered"]]
-    overdue_task_leads_list = [r for r in all_leads if r.get("has_overdue_task") and not r["stale_unanswered"]]
+    charts_html: list[str] = []
+    js_inits: list[str] = []
+
+    def _chart(
+        cid: str,
+        title: str,
+        ctype: str,
+        data: dict[str, int],
+        palette: list[str],
+        horizontal: bool = False,
+    ) -> None:
+        if not data:
+            return
+        n = len(data)
+        is_pie = ctype in ("doughnut", "pie")
+        h = "260" if is_pie else (str(max(200, n * 34 + 50)) if horizontal else "220")
+        labels_j = json.dumps(list(data.keys()), ensure_ascii=False)
+        values_j = json.dumps(list(data.values()))
+        colors_j = json.dumps([palette[i % len(palette)] for i in range(n)])
+        charts_html.append(
+            "<div class='cc'><h3>" + _esc(title) + "</h3>"
+            "<div style='position:relative;height:" + h + "px'>"
+            "<canvas id='" + cid + "'></canvas></div></div>\n"
+        )
+        if is_pie:
+            js_inits.append(
+                "new Chart(document.getElementById('" + cid + "'),{"
+                "type:'" + ctype + "',"
+                "data:{labels:" + labels_j + ",datasets:[{"
+                "data:" + values_j + ",backgroundColor:" + colors_j + "}]},"
+                "options:{responsive:true,maintainAspectRatio:false,"
+                "plugins:{legend:{position:'bottom'}}}});\n"
+            )
+        elif horizontal:
+            js_inits.append(
+                "new Chart(document.getElementById('" + cid + "'),{"
+                "type:'bar',"
+                "data:{labels:" + labels_j + ",datasets:[{"
+                "data:" + values_j + ",backgroundColor:" + colors_j + ",borderRadius:3}]},"
+                "options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,"
+                "plugins:{legend:{display:false}},"
+                "scales:{x:{beginAtZero:true,ticks:{stepSize:1}}}}});\n"
+            )
+        else:
+            js_inits.append(
+                "new Chart(document.getElementById('" + cid + "'),{"
+                "type:'" + ctype + "',"
+                "data:{labels:" + labels_j + ",datasets:[{"
+                "data:" + values_j + ",backgroundColor:" + colors_j + ",borderRadius:3}]},"
+                "options:{responsive:true,maintainAspectRatio:false,"
+                "plugins:{legend:{display:false}},"
+                "scales:{y:{beginAtZero:true,ticks:{stepSize:1}}}}});\n"
+            )
+
+    sources_map = {SOURCE_LABELS.get(k, k): v for k, v in summary.get("sources", {}).items()}
+    spec_map    = {SPECIALTY_LABELS.get(k, k): v
+                   for k, v in sorted(summary.get("specialties", {}).items(), key=lambda x: -x[1])}
+    city_map    = dict(sorted(summary.get("cities", {}).items(), key=lambda x: -x[1]))
+    bot_map     = dict(sorted(summary.get("bot_stages", {}).items(), key=lambda x: -x[1]))
+    hour_map    = {k + "h": v
+                   for k, v in sorted(summary.get("leads_by_hour", {}).items(), key=lambda x: int(x[0]))}
+    wday_map    = summary.get("leads_by_weekday", {})
+
+    _chart("srcChart",  "Canal de Captação",      "doughnut", sources_map, _GREEN)
+    _chart("specChart", "Por Especialidade",       "bar",      spec_map,    _GREEN,  horizontal=True)
+    _chart("cityChart", "Por Unidade",             "doughnut", city_map,    _BLUE)
+    _chart("botChart",  "Funil do Bot",            "bar",      bot_map,     _ORANGE, horizontal=True)
+    _chart("hourChart", "Leads por Hora (UTC)",    "bar",      hour_map,    _PURPLE)
+    _chart("wdayChart", "Leads por Dia da Semana", "bar",      wday_map,    _BLUE)
+
+    stale_leads     = [r for r in all_leads if r["stale_unanswered"]]
+    overdue_leads   = [r for r in all_leads if r.get("has_overdue_task") and not r["stale_unanswered"]]
     unanswered_only = [r for r in all_leads if r["unanswered"] and not r["stale_unanswered"]]
 
-    body = (
-        "<h1>Análise de Leads — Clínica QARA</h1>\n"
-        + ("<p><em>Gerado em " + _esc(generated) + "</em></p>\n" if generated else "")
-        + "<h2>Visão Geral</h2>\n"
-        + cards_html + "\n"
-        + sources_chart
-        + specialty_chart
-        + city_chart
-        + bot_chart
-        + weekday_chart
-        + hour_chart
-        + _lead_table(stale_leads, "⚠️ Urgente — Sem Resposta Vencida")
-        + _lead_table(overdue_task_leads_list, "🔔 Tarefas Vencidas")
-        + _lead_table(unanswered_only[:top_n], "📬 Aguardando Resposta")
+    tables_html = (
+        _lead_table(stale_leads,      "⚠️ Urgente — Sem Resposta Vencida (" + str(len(stale_leads)) + ")")
+        + _lead_table(overdue_leads,  "🔔 Tarefas Vencidas (" + str(len(overdue_leads)) + ")")
+        + _lead_table(unanswered_only[:top_n], "📬 Aguardando Resposta (" + str(len(unanswered_only)) + ")")
         + _lead_table(all_leads[:top_n], "Top " + str(top_n) + " Prioridades")
+    )
+
+    css = (
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;color:#1e293b;padding:20px}"
+        "h1{color:#14532d;font-size:1.75rem;margin-bottom:4px}"
+        "h2{color:#166534;font-size:1.15rem;margin:28px 0 10px;border-bottom:2px solid #bbf7d0;padding-bottom:6px}"
+        "h3{color:#374151;font-size:.95rem;font-weight:600;margin-bottom:8px}"
+        ".sub{color:#6b7280;font-size:.88rem;margin-bottom:24px}"
+        ".cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}"
+        ".card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 20px;min-width:130px;box-shadow:0 1px 3px #0001}"
+        ".card .val{font-size:1.8rem;font-weight:700;color:#15803d;line-height:1}"
+        ".card .lbl{font-size:.75rem;color:#6b7280;margin-top:4px}"
+        ".cg{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:20px;margin-bottom:28px}"
+        ".cc{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;box-shadow:0 1px 3px #0001}"
+        "section{margin-bottom:28px}"
+        ".tw{overflow-x:auto}"
+        "table{border-collapse:collapse;width:100%;font-size:.82rem;background:#fff}"
+        "th{background:#f1f5f9;color:#374151;font-weight:600;padding:8px 10px;border-bottom:2px solid #e2e8f0;white-space:nowrap;text-align:left}"
+        "td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}"
+        "td code{background:#eff6ff;color:#1d4ed8;padding:1px 5px;border-radius:4px;font-size:.78rem}"
+        "tr.stale td{background:#fff1f2}"
+        "tr.unanswered td{background:#fffbeb}"
+        "tr:hover td{background:#f0fdf4!important}"
+        ".score{display:inline-block;padding:2px 8px;border-radius:12px;font-weight:700;font-size:.8rem}"
+        ".score.hi{background:#dcfce7;color:#15803d}"
+        ".score.md{background:#fef9c3;color:#854d0e}"
+        ".score.lo{background:#fee2e2;color:#991b1b}"
+        ".up{color:#15803d;font-weight:600}"
+        ".dn{color:#b91c1c;font-weight:600}"
+        ".rec{max-width:260px;font-size:.8rem}"
+        "@media(max-width:600px){.cg{grid-template-columns:1fr}}"
     )
 
     return (
@@ -982,10 +1125,16 @@ tr:hover{background:#f0fdf4}
         "<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
         "<title>Análise de Leads — Clínica QARA</title>\n"
+        "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js'></script>\n"
         "<style>" + css + "</style>\n"
         "</head>\n<body>\n"
-        + body
-        + "</body>\n</html>\n"
+        "<h1>Análise de Leads — Clínica QARA</h1>\n"
+        + ("<p class='sub'>Gerado em " + _esc(generated) + "</p>\n" if generated else "")
+        + cards_html
+        + "<div class='cg'>\n" + "".join(charts_html) + "</div>\n"
+        + tables_html
+        + "<script>\n" + "".join(js_inits) + "</script>\n"
+        "</body>\n</html>\n"
     )
 
 
@@ -1387,19 +1536,22 @@ def fetch_talks_messages(
             payload = json.loads(raw)
         except json.JSONDecodeError:
             break
+        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         if not _debug_printed:
             _debug_printed = True
-            embedded_debug = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
-            keys = list(embedded_debug.keys()) if isinstance(embedded_debug, dict) else []
-            sample = next(iter(embedded_debug.values()), []) if isinstance(embedded_debug, dict) else []
-            sample_talk = sample[0] if isinstance(sample, list) and sample else {}
+            keys = list(embedded.keys()) if isinstance(embedded, dict) else []
+            first_value = next(iter(embedded.values()), []) if isinstance(embedded, dict) else []
+            sample_talk: dict[str, Any] = {}
+            if isinstance(first_value, list) and first_value and isinstance(first_value[0], dict):
+                sample_talk = first_value[0]
+            elif isinstance(first_value, dict):
+                sample_talk = first_value
             print(
                 f"DEBUG talks pg1: _embedded={keys}, "
                 f"talk fields={list(sample_talk.keys())}, "
                 f"entity_type_sample={sample_talk.get('entity_type')!r}",
                 file=sys.stderr,
             )
-        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         for v in embedded.values():
             if isinstance(v, list):
                 talks.extend(t for t in v if isinstance(t, dict))
@@ -1581,6 +1733,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Modo diagnóstico: consulta vários endpoints da API para 1 lead e "
              "imprime o JSON cru. Requer --from-api. Não gera relatório.",
     )
+    parser.add_argument(
+        "--from-report",
+        metavar="REPORT_JSON",
+        help="Lê um relatório JSON gerado anteriormente e re-renderiza no formato "
+             "especificado sem chamar a API novamente.",
+    )
     return parser
 
 
@@ -1724,6 +1882,8 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
                                 "required_secrets": ["KOMMO_CHAT_SCOPE_ID", "KOMMO_CHAT_SECRET"],
                             },
                         )
+                show(f"GET /api/v4/talks/{tid}/messages",
+                     _probe_get(subdomain, token, f"talks/{tid}/messages?limit=10"))
                 break
 
     def sort_source_id(value: str) -> tuple[int, str]:
@@ -1782,6 +1942,25 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+
+    # --from-report: re-render a previously saved JSON report without hitting the API.
+    if getattr(args, "from_report", None):
+        with open(args.from_report, "r", encoding="utf-8") as fh:
+            report = json.load(fh)
+        if args.format == "json":
+            content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        elif args.format == "csv":
+            write_csv(report, args.output)
+        elif args.format == "html":
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(render_html(report, top_n=args.top_n))
+        else:
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(render_markdown(report, top_n=args.top_n))
+        print("Relatório salvo em " + args.output)
+        return 0
 
     name_map: dict[str, str] | None = None
     overdue_task_lead_ids: set[str] | None = None
