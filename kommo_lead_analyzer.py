@@ -1224,18 +1224,30 @@ def fetch_talks_messages(
     url: str = base_url + "talks?limit=250"
     talks: list[dict[str, Any]] = []
 
+    _debug_printed = False
     while url and len(talks) < max_talks:
         try:
             raw = _api_request(url, token).decode("utf-8").strip()
         except RuntimeError as exc:
-            print("Aviso: não foi possível buscar talks: " + str(exc), file=sys.stderr)
+            print("Aviso: erro ao buscar talks: " + str(exc), file=sys.stderr)
             break
         if not raw:
+            print("Aviso: /api/v4/talks retornou resposta vazia", file=sys.stderr)
             break
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
             break
+        # Debug: print raw structure of first page so we can see the field names.
+        if not _debug_printed:
+            _debug_printed = True
+            keys = list(payload.get("_embedded", {}).keys()) if isinstance(payload, dict) else []
+            page_total = payload.get("_page", {}).get("total") if isinstance(payload, dict) else None
+            sample_keys = list(talks[0].keys()) if talks else (
+                list(next(iter(payload.get("_embedded", {}).values()), [{}])[0].keys())
+                if payload.get("_embedded") else []
+            )
+            print(f"DEBUG talks: _embedded keys={keys}, total={page_total}, talk fields={sample_keys}", file=sys.stderr)
         embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         for v in embedded.values():
             if isinstance(v, list):
@@ -1245,6 +1257,8 @@ def fetch_talks_messages(
                      if isinstance(payload, dict) else None)
         url = str(urllib.parse.urljoin(url, next_href)) if next_href else ""
 
+    print(f"Talks total: {len(talks)}", file=sys.stderr)
+
     # Filter to only talks for leads in our current analysis window.
     if known_lead_ids is not None:
         talks = [t for t in talks
@@ -1252,6 +1266,17 @@ def fetch_talks_messages(
                  and str(t.get("entity_type") or "").lower() in ("leads", "lead", "")]
 
     print(f"Talks encontrados: {len(talks)} conversas para buscar mensagens")
+
+    # Debug: probe the messages endpoint on the first matching talk.
+    if talks:
+        probe_id = str(talks[0].get("id") or "")
+        try:
+            probe_raw = _api_request(base_url + "talks/" + probe_id + "/messages?limit=5", token).decode("utf-8").strip()
+            probe = json.loads(probe_raw) if probe_raw else {}
+            print(f"DEBUG talk/{probe_id}/messages: keys={list(probe.keys())}, "
+                  f"_embedded={list(probe.get('_embedded', {}).keys())}", file=sys.stderr)
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            print(f"DEBUG talk/{probe_id}/messages error: {exc}", file=sys.stderr)
 
     messages: list[Message] = []
     for talk in talks:
@@ -1262,7 +1287,8 @@ def fetch_talks_messages(
 
         try:
             raw = _api_request(base_url + "talks/" + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
-        except RuntimeError:
+        except RuntimeError as exc:
+            print(f"DEBUG talk/{talk_id}/messages error: {exc}", file=sys.stderr)
             continue
         if not raw:
             continue
@@ -1397,7 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
         leads_raw = fetch_kommo_collection(
             subdomain, token, "leads",
             filter_from=filter_from, filter_to=filter_to,
-            extra_params={"with": "contacts"},
+            extra_params={"with": "contacts,custom_fields"},
         )
         leads = extract_leads(leads_raw)
         contact_lead_map = build_contact_lead_map(leads_raw)
