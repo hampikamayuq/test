@@ -2,6 +2,11 @@ name: Kommo Lead Analysis
 
 on:
   workflow_dispatch:
+    inputs:
+      probe_lead_id:
+        description: "Diagnóstico: ID de um lead para inspecionar a API (deixe vazio para relatório normal)"
+        required: false
+        default: ""
   schedule:
     # Runs every day at 12:00 UTC. Adjust if you need another timezone.
     - cron: "0 12 * * *"
@@ -46,7 +51,15 @@ jobs:
         id: filter-date
         run: echo "date=$(date -d '90 days ago' '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
+      - name: Run API probe (diagnóstico)
+        if: ${{ github.event.inputs.probe_lead_id != '' }}
+        run: |
+          python kommo_lead_analyzer.py \
+            --from-api \
+            --probe "${{ github.event.inputs.probe_lead_id }}"
+
       - name: Run Kommo analysis
+        if: ${{ github.event.inputs.probe_lead_id == '' }}
         run: |
           python kommo_lead_analyzer.py \
             --from-api \
@@ -56,6 +69,7 @@ jobs:
             --output kommo_analysis.md
 
       - name: Upload report artifact
+        if: ${{ github.event.inputs.probe_lead_id == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: kommo-analysis-report
