@@ -1211,14 +1211,14 @@ def fetch_talks_messages(
     subdomain: str,
     token: str,
     known_lead_ids: set[str] | None = None,
+    contact_lead_map: dict[str, str] | None = None,
     max_talks: int = 5000,
 ) -> list[Message]:
     """Fetch WhatsApp messages from Kommo's native inbox (Talks API).
 
-    The /api/v4/talks endpoint does not reliably support created_at date
-    filters, so we fetch all talks (paginated) and filter client-side to the
-    leads we care about. Per-talk message calls are only made for matching
-    leads, keeping the total API call count reasonable.
+    Talks can be linked to leads (entity_type=leads) OR to contacts
+    (entity_type=contacts). We handle both cases using contact_lead_map to
+    resolve contact talks back to lead IDs.
     """
     base_url = "https://" + subdomain + ".kommo.com/api/v4/"
     url: str = base_url + "talks?limit=250"
@@ -1238,16 +1238,18 @@ def fetch_talks_messages(
             payload = json.loads(raw)
         except json.JSONDecodeError:
             break
-        # Debug: print raw structure of first page so we can see the field names.
         if not _debug_printed:
             _debug_printed = True
             keys = list(payload.get("_embedded", {}).keys()) if isinstance(payload, dict) else []
-            page_total = payload.get("_page", {}).get("total") if isinstance(payload, dict) else None
-            sample_keys = list(talks[0].keys()) if talks else (
-                list(next(iter(payload.get("_embedded", {}).values()), [{}])[0].keys())
-                if payload.get("_embedded") else []
+            first_items = list(next(iter(payload.get("_embedded", {}).values() if payload.get("_embedded") else []), {}).keys()) if isinstance(payload, dict) else []
+            sample = next(iter((payload.get("_embedded") or {}).values()), [{}])
+            sample_talk = sample[0] if sample else {}
+            print(
+                f"DEBUG talks pg1: _embedded={keys}, "
+                f"talk fields={list(sample_talk.keys())}, "
+                f"entity_type_sample={sample_talk.get('entity_type')!r}",
+                file=sys.stderr,
             )
-            print(f"DEBUG talks: _embedded keys={keys}, total={page_total}, talk fields={sample_keys}", file=sys.stderr)
         embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
         for v in embedded.values():
             if isinstance(v, list):
@@ -1257,38 +1259,45 @@ def fetch_talks_messages(
                      if isinstance(payload, dict) else None)
         url = str(urllib.parse.urljoin(url, next_href)) if next_href else ""
 
-    print(f"Talks total: {len(talks)}", file=sys.stderr)
+    print(f"Talks total buscados: {len(talks)}", file=sys.stderr)
 
-    # Filter to only talks for leads in our current analysis window.
-    if known_lead_ids is not None:
-        talks = [t for t in talks
-                 if str(t.get("entity_id") or "") in known_lead_ids
-                 and str(t.get("entity_type") or "").lower() in ("leads", "lead", "")]
+    # Resolve each talk to a lead_id, handling both entity_type values.
+    talk_to_lead: list[tuple[str, str]] = []  # [(talk_id, lead_id)]
+    for t in talks:
+        talk_id = str(t.get("id") or "").strip()
+        entity_id = str(t.get("entity_id") or "").strip()
+        entity_type = str(t.get("entity_type") or "").lower()
+        if not talk_id or not entity_id:
+            continue
+        if entity_type in ("leads", "lead", ""):
+            if known_lead_ids is None or entity_id in known_lead_ids:
+                talk_to_lead.append((talk_id, entity_id))
+        elif entity_type in ("contacts", "contact"):
+            lead_id = (contact_lead_map or {}).get(entity_id)
+            if lead_id and (known_lead_ids is None or lead_id in known_lead_ids):
+                talk_to_lead.append((talk_id, lead_id))
 
-    print(f"Talks encontrados: {len(talks)} conversas para buscar mensagens")
+    print(f"Talks encontrados: {len(talk_to_lead)} conversas para buscar mensagens", file=sys.stderr)
 
-    # Debug: probe the messages endpoint on the first matching talk.
-    if talks:
-        probe_id = str(talks[0].get("id") or "")
+    # Probe the first talk's messages to confirm endpoint structure.
+    if talk_to_lead:
+        probe_id = talk_to_lead[0][0]
         try:
             probe_raw = _api_request(base_url + "talks/" + probe_id + "/messages?limit=5", token).decode("utf-8").strip()
             probe = json.loads(probe_raw) if probe_raw else {}
-            print(f"DEBUG talk/{probe_id}/messages: keys={list(probe.keys())}, "
-                  f"_embedded={list(probe.get('_embedded', {}).keys())}", file=sys.stderr)
+            print(
+                f"DEBUG talk/{probe_id}/messages: keys={list(probe.keys())}, "
+                f"_embedded={list(probe.get('_embedded', {}).keys())}",
+                file=sys.stderr,
+            )
         except (RuntimeError, json.JSONDecodeError) as exc:
             print(f"DEBUG talk/{probe_id}/messages error: {exc}", file=sys.stderr)
 
     messages: list[Message] = []
-    for talk in talks:
-        talk_id = str(talk.get("id") or "").strip()
-        lead_id = str(talk.get("entity_id") or "").strip()
-        if not talk_id or not lead_id:
-            continue
-
+    for talk_id, lead_id in talk_to_lead:
         try:
             raw = _api_request(base_url + "talks/" + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
-        except RuntimeError as exc:
-            print(f"DEBUG talk/{talk_id}/messages error: {exc}", file=sys.stderr)
+        except RuntimeError:
             continue
         if not raw:
             continue
@@ -1329,6 +1338,58 @@ def fetch_talks_messages(
                 raw=msg,
             ))
 
+    return messages
+
+
+def fetch_whatsapp_notes_per_lead(
+    subdomain: str,
+    token: str,
+    lead_ids: list[str],
+    max_leads: int = 500,
+) -> list[Message]:
+    """Fetch WhatsApp notes (note_type 102/103) per lead as a guaranteed fallback.
+
+    The bulk /api/v4/leads/notes endpoint sometimes omits WhatsApp chat notes.
+    Fetching per-lead with explicit note_type filters retrieves them directly.
+    Limited to max_leads to keep runtime reasonable.
+    """
+    base = "https://" + subdomain + ".kommo.com/api/v4/leads/"
+    messages: list[Message] = []
+    fetched = 0
+    for lead_id in lead_ids[:max_leads]:
+        url = base + lead_id + "/notes?filter[note_type][]=102&filter[note_type][]=103&limit=250"
+        try:
+            raw = _api_request(url, token).decode("utf-8").strip()
+        except RuntimeError:
+            continue
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
+        for v in embedded.values():
+            if isinstance(v, list):
+                for row in v:
+                    if not isinstance(row, dict):
+                        continue
+                    params = row.get("params") if isinstance(row.get("params"), dict) else {}
+                    text = normalize_text(
+                        first_present(row, TEXT_KEYS) or first_present(params, TEXT_KEYS) or params
+                    )
+                    if text:
+                        messages.append(Message(
+                            lead_id=lead_id,
+                            text=text,
+                            created_at=parse_timestamp(first_present(row, TIME_KEYS)),
+                            direction=infer_direction(row, text),
+                            raw=row,
+                        ))
+                break
+        fetched += 1
+
+    print(f"Notas WhatsApp por lead: {len(messages)} msgs em {fetched} leads verificados", file=sys.stderr)
     return messages
 
 
@@ -1432,14 +1493,20 @@ def main(argv: list[str] | None = None) -> int:
             fetch_kommo_collection(subdomain, token, "leads/notes", filter_from=filter_from, filter_to=filter_to)
         )
         contact_msgs = fetch_contact_messages(subdomain, token, contact_lead_map, filter_from=filter_from, filter_to=filter_to)
-        talks_msgs = fetch_talks_messages(subdomain, token, known_lead_ids=set(leads.keys()))
+        talks_msgs = fetch_talks_messages(
+            subdomain, token,
+            known_lead_ids=set(leads.keys()),
+            contact_lead_map=contact_lead_map,
+        )
         custom_field_msgs = extract_custom_field_messages(leads_raw)
-        messages = lead_notes + contact_msgs + talks_msgs + custom_field_msgs
+        wa_notes = fetch_whatsapp_notes_per_lead(subdomain, token, list(leads.keys()))
+        messages = lead_notes + contact_msgs + talks_msgs + custom_field_msgs + wa_notes
         print(
             f"Mensagens carregadas: {len(lead_notes)} notas de leads"
             f" + {len(contact_msgs)} notas de contatos"
-            f" + {len(talks_msgs)} mensagens de conversa"
+            f" + {len(talks_msgs)} msgs de conversa"
             f" + {len(custom_field_msgs)} campos customizados"
+            f" + {len(wa_notes)} notas WhatsApp por lead"
             f" = {len(messages)} total"
         )
         name_map = fetch_pipeline_names(subdomain, token)
