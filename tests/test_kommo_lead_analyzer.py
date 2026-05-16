@@ -1,6 +1,7 @@
 import json
 import hashlib
 import hmac
+import io
 import pathlib
 import subprocess
 import sys
@@ -313,11 +314,19 @@ class FetchTalksMessagesTest(unittest.TestCase):
             self.assertNotIn("/messages", url)
             return json.dumps(talks_payload).encode("utf-8")
 
-        with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request):
-            messages = fetch_talks_messages("demo", "token", known_lead_ids={"123"})
+        with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request), \
+             mock.patch.object(kommo_lead_analyzer, "_chat_api_request") as chat_request:
+            messages = fetch_talks_messages(
+                "demo",
+                "token",
+                known_lead_ids={"123"},
+                chat_scope_id="",
+                chat_secret="",
+            )
 
         self.assertEqual(messages, [])
         self.assertEqual(len(calls), 1)
+        chat_request.assert_not_called()
 
     def test_fetches_chat_history_with_chat_api_credentials(self):
         talks_payload = {
@@ -372,6 +381,54 @@ class FetchTalksMessagesTest(unittest.TestCase):
         self.assertEqual(messages[0].text, "Quero agendar")
         self.assertEqual(messages[0].direction, "incoming")
         self.assertEqual(len(chat_calls), 1)
+
+    def test_limits_chat_api_error_logs_with_talk_context(self):
+        talks_payload = {
+            "_embedded": {
+                "talks": [
+                    {
+                        "talk_id": f"talk-{idx}",
+                        "chat_id": f"chat-{idx}",
+                        "entity_id": str(100 + idx),
+                        "entity_type": "lead",
+                        "origin": "waba",
+                        "source_id": 49893,
+                    }
+                    for idx in range(1, 5)
+                ]
+            },
+            "_links": {},
+        }
+
+        def fake_api_request(url, token):
+            self.assertEqual(token, "token")
+            return json.dumps(talks_payload).encode("utf-8")
+
+        def fake_chat_api_request(path, secret, query=None):
+            raise RuntimeError("Kommo Chats API returned HTTP 404:")
+
+        stderr = io.StringIO()
+        with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request), \
+             mock.patch.object(kommo_lead_analyzer, "_chat_api_request", side_effect=fake_chat_api_request) as chat_request, \
+             mock.patch("sys.stderr", stderr):
+            messages = fetch_talks_messages(
+                "demo",
+                "token",
+                known_lead_ids={"101", "102", "103", "104"},
+                chat_scope_id="scope-id",
+                chat_secret="chat-secret",
+            )
+
+        log = stderr.getvalue()
+        self.assertEqual(messages, [])
+        self.assertEqual(chat_request.call_count, 3)
+        self.assertEqual(log.count("Aviso: erro Chats API"), 3)
+        self.assertIn("origin=waba", log)
+        self.assertIn("source_id=49893", log)
+        self.assertIn("talk_id=talk-1", log)
+        self.assertIn("chat_id=chat-1", log)
+        self.assertIn("pulando 1 talks restantes", log)
+        self.assertNotIn("talk_id=talk-4", log)
 
 
 # ---------------------------------------------------------------------------
@@ -685,6 +742,62 @@ class WriteCsvTest(unittest.TestCase):
         self.assertIn("bot_stage", header)
         self.assertIn("payment_type", header)
         self.assertIn("return_patient", header)
+
+
+# ---------------------------------------------------------------------------
+# run_probe()
+# ---------------------------------------------------------------------------
+
+class RunProbeTest(unittest.TestCase):
+    def test_fetches_source_and_prints_chat_diagnostic(self):
+        calls = []
+        talk = {
+            "talk_id": "10086",
+            "chat_id": "chat-abc",
+            "entity_id": "21936053",
+            "entity_type": "lead",
+            "origin": "waba",
+            "source_id": 49893,
+        }
+
+        def fake_probe_get(subdomain, token, path):
+            calls.append(path)
+            self.assertEqual(subdomain, "demo")
+            self.assertEqual(token, "token")
+            if path == "leads/21936053?with=contacts,custom_fields":
+                return {"_embedded": {"contacts": []}}
+            if path == "talks?filter[entity_id]=21936053&filter[entity_type]=leads":
+                return {"_embedded": {"talks": [talk]}}
+            if path == "talks?limit=3":
+                return {"_embedded": {"talks": [talk]}}
+            if path == "talks/10086":
+                return talk
+            if path == "sources/49893":
+                return {"id": 49893, "name": "WhatsApp WABA"}
+            if path == "account?with=amojo_id,amojo_rights":
+                return {"id": 33340731, "amojo_id": "amojo-account"}
+            return {}
+
+        stdout = io.StringIO()
+        with mock.patch.object(kommo_lead_analyzer, "_probe_get", side_effect=fake_probe_get), \
+             mock.patch.object(
+                 kommo_lead_analyzer,
+                 "_chat_api_request",
+                 side_effect=RuntimeError("Kommo Chats API returned HTTP 404:"),
+             ), \
+             mock.patch.dict("os.environ", {"KOMMO_CHAT_SCOPE_ID": "scope-id", "KOMMO_CHAT_SECRET": "secret"}, clear=True), \
+             mock.patch("sys.stdout", stdout):
+            result = kommo_lead_analyzer.run_probe("demo", "token", "21936053")
+
+        output = stdout.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("sources/49893", calls)
+        self.assertIn("GET /api/v4/sources/49893", output)
+        self.assertIn("PROBE DIAGNOSTICO FINAL", output)
+        self.assertIn('"origin": "waba"', output)
+        self.assertIn('"source_id": "49893"', output)
+        self.assertIn("HTTP 404", output)
+        self.assertIn("KOMMO_CHAT_SCOPE_ID/KOMMO_CHAT_SECRET", output)
 
 
 # ---------------------------------------------------------------------------
