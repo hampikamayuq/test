@@ -5,9 +5,12 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+import kommo_lead_analyzer
 
 from kommo_lead_analyzer import (
     analyze,
@@ -20,6 +23,7 @@ from kommo_lead_analyzer import (
     detect_specialty,
     extract_leads,
     extract_messages,
+    fetch_talks_messages,
     format_seconds,
     infer_direction,
     load_delta_snapshot,
@@ -257,6 +261,49 @@ class ComputeFirstResponseTest(unittest.TestCase):
             Message(lead_id="1", text="claro", direction="outgoing", created_at=1_700_000_500),
         ]
         self.assertEqual(compute_first_response_seconds(msgs), 60)
+
+
+# ---------------------------------------------------------------------------
+# fetch_talks_messages()
+# ---------------------------------------------------------------------------
+
+class FetchTalksMessagesTest(unittest.TestCase):
+    def test_handles_embedded_talks_list_with_talk_id(self):
+        responses = [
+            {
+                "_embedded": {
+                    "talks": [
+                        {"talk_id": "talk-abc", "entity_id": "123", "entity_type": "leads"}
+                    ]
+                },
+                "_links": {},
+            },
+            {"_embedded": {"messages": []}},
+            {
+                "_embedded": {
+                    "messages": [
+                        {
+                            "text": "Quero agendar",
+                            "created_at": 1_700_000_000,
+                            "from": {"type": "client"},
+                        }
+                    ]
+                }
+            },
+        ]
+
+        def fake_api_request(url, token):
+            self.assertEqual(token, "token")
+            return json.dumps(responses.pop(0)).encode("utf-8")
+
+        with mock.patch.object(kommo_lead_analyzer, "_api_request", side_effect=fake_api_request):
+            messages = fetch_talks_messages("demo", "token", known_lead_ids={"123"})
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].lead_id, "123")
+        self.assertEqual(messages[0].text, "Quero agendar")
+        self.assertEqual(messages[0].direction, "incoming")
+        self.assertEqual(responses, [])
 
 
 # ---------------------------------------------------------------------------
