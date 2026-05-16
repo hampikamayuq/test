@@ -1441,7 +1441,82 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Desativa o relatório delta (não lê nem salva snapshot anterior).",
     )
+    parser.add_argument(
+        "--probe",
+        metavar="LEAD_ID",
+        help="Modo diagnóstico: consulta vários endpoints da API para 1 lead e "
+             "imprime o JSON cru. Requer --from-api. Não gera relatório.",
+    )
     return parser
+
+
+def _probe_get(subdomain: str, token: str, path: str) -> Any:
+    url = "https://" + subdomain + ".kommo.com/api/v4/" + path.lstrip("/")
+    try:
+        raw = _api_request(url, token).decode("utf-8", errors="replace").strip()
+    except RuntimeError as exc:
+        return {"__error__": str(exc)}
+    if not raw:
+        return {"__empty_body__": True}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"__non_json__": raw[:500]}
+
+
+def run_probe(subdomain: str, token: str, lead_id: str) -> int:
+    """Hit every candidate endpoint for one lead and dump raw JSON.
+
+    This gives ground truth about where Kommo stores conversation content
+    for this account, instead of guessing.
+    """
+    def show(label: str, data: Any) -> None:
+        print("\n" + "=" * 70)
+        print(label)
+        print("=" * 70)
+        print(json.dumps(data, ensure_ascii=False, indent=2)[:4000])
+
+    lead = _probe_get(subdomain, token, f"leads/{lead_id}?with=contacts,custom_fields")
+    show(f"GET /api/v4/leads/{lead_id}?with=contacts,custom_fields", lead)
+
+    contact_ids: list[str] = []
+    if isinstance(lead, dict):
+        for c in (lead.get("_embedded", {}) or {}).get("contacts", []) or []:
+            if isinstance(c, dict) and c.get("id"):
+                contact_ids.append(str(c["id"]))
+
+    show(f"GET /api/v4/leads/{lead_id}/notes",
+         _probe_get(subdomain, token, f"leads/{lead_id}/notes?limit=50"))
+
+    for cid in contact_ids[:2]:
+        show(f"GET /api/v4/contacts/{cid}?with=custom_fields",
+             _probe_get(subdomain, token, f"contacts/{cid}?with=custom_fields"))
+        show(f"GET /api/v4/contacts/{cid}/notes",
+             _probe_get(subdomain, token, f"contacts/{cid}/notes?limit=50"))
+
+    show(f"GET /api/v4/talks?filter[entity_id]={lead_id}&filter[entity_type]=leads",
+         _probe_get(subdomain, token, f"talks?filter[entity_id]={lead_id}&filter[entity_type]=leads"))
+    for cid in contact_ids[:1]:
+        show(f"GET /api/v4/talks?filter[entity_id]={cid}&filter[entity_type]=contacts",
+             _probe_get(subdomain, token, f"talks?filter[entity_id]={cid}&filter[entity_type]=contacts"))
+
+    talks_any = _probe_get(subdomain, token, "talks?limit=3")
+    show("GET /api/v4/talks?limit=3 (amostra geral)", talks_any)
+    if isinstance(talks_any, dict):
+        for t in (talks_any.get("_embedded", {}) or {}).get("talks", []) or []:
+            if isinstance(t, dict) and t.get("id"):
+                tid = str(t["id"])
+                show(f"GET /api/v4/talks/{tid}/messages",
+                     _probe_get(subdomain, token, f"talks/{tid}/messages?limit=10"))
+                break
+
+    show("GET /api/v4/account?with=amojo_id (verifica acesso a chats)",
+         _probe_get(subdomain, token, "account?with=amojo_id,amojo_rights"))
+
+    print("\n" + "=" * 70)
+    print("FIM DO PROBE — copie TODO este output e cole de volta para análise.")
+    print("=" * 70)
+    return 0
 
 
 def _parse_date_to_timestamp(value: str) -> int:
@@ -1478,6 +1553,8 @@ def main(argv: list[str] | None = None) -> int:
         if not subdomain or not token:
             print("Defina KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN para usar --from-api.", file=sys.stderr)
             return 2
+        if args.probe:
+            return run_probe(subdomain, token, str(args.probe).strip())
         # Fetch leads with embedded contacts so we can map contact_id → lead_id.
         # Many WhatsApp integrations (Z-API, Wevo, etc.) attach notes to the
         # Contact record rather than the Lead.
