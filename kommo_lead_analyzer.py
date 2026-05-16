@@ -1240,10 +1240,10 @@ def fetch_talks_messages(
             break
         if not _debug_printed:
             _debug_printed = True
-            keys = list(payload.get("_embedded", {}).keys()) if isinstance(payload, dict) else []
-            first_items = list(next(iter(payload.get("_embedded", {}).values() if payload.get("_embedded") else []), {}).keys()) if isinstance(payload, dict) else []
-            sample = next(iter((payload.get("_embedded") or {}).values()), [{}])
-            sample_talk = sample[0] if sample else {}
+            embedded_debug = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
+            keys = list(embedded_debug.keys()) if isinstance(embedded_debug, dict) else []
+            sample = next(iter(embedded_debug.values()), []) if isinstance(embedded_debug, dict) else []
+            sample_talk = sample[0] if isinstance(sample, list) and sample else {}
             print(
                 f"DEBUG talks pg1: _embedded={keys}, "
                 f"talk fields={list(sample_talk.keys())}, "
