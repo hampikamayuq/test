@@ -10,6 +10,9 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import email.utils
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -1059,6 +1062,51 @@ def _api_request(url: str, token: str, timeout: int = 30, max_retries: int = 4) 
     raise RuntimeError("Max retries exceeded: " + str(last_exc)) from last_exc
 
 
+def _chat_api_headers(
+    method: str,
+    path: str,
+    secret: str,
+    body: bytes = b"",
+    date_header: str | None = None,
+) -> dict[str, str]:
+    content_type = "application/json"
+    content_md5 = hashlib.md5(body).hexdigest()
+    date_value = date_header or email.utils.formatdate(usegmt=True)
+    signature_source = "\n".join([method.upper(), content_md5, content_type, date_value, path])
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        signature_source.encode("utf-8"),
+        hashlib.sha1,
+    ).hexdigest()
+    return {
+        "Accept": "application/json",
+        "Content-Type": content_type,
+        "Content-MD5": content_md5,
+        "Date": date_value,
+        "X-Signature": signature,
+    }
+
+
+def _chat_api_request(
+    path: str,
+    secret: str,
+    query: dict[str, int] | None = None,
+    timeout: int = 30,
+) -> bytes:
+    query_string = urllib.parse.urlencode(query or {})
+    url = "https://amojo.kommo.com" + path + (("?" + query_string) if query_string else "")
+    headers = _chat_api_headers("GET", path, secret, body=b"")
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError("Kommo Chats API returned HTTP " + str(exc.code) + ": " + details) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError("Network error reaching Kommo Chats API: " + str(exc.reason)) from exc
+
+
 def fetch_kommo_collection(
     subdomain: str,
     token: str,
@@ -1207,12 +1255,111 @@ def fetch_contact_messages(
     return messages
 
 
+def _chat_history_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    embedded = payload.get("_embedded")
+    if isinstance(embedded, dict):
+        for key in ("messages", "items"):
+            value = embedded.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        for value in embedded.values():
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    for key in ("messages", "items", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _chat_history_text(item: dict[str, Any]) -> str:
+    message = item.get("message") if isinstance(item.get("message"), dict) else {}
+    return normalize_text(
+        item.get("text")
+        or item.get("content")
+        or item.get("body")
+        or message.get("text")
+        or message.get("content")
+        or message.get("body")
+        or ""
+    )
+
+
+def _chat_history_direction(item: dict[str, Any]) -> str:
+    direct = str(first_present(item, ("type", "direction")) or "").lower()
+    if direct in ("incoming", "inbound", "client", "customer", "contact", "external"):
+        return "incoming"
+    if direct in ("outgoing", "outbound", "user", "manager", "bot", "amo_bot", "salesbot"):
+        return "outgoing"
+    for key in ("sender", "author", "from", "user"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            raw_type = str(first_present(value, ("type", "role")) or "").lower()
+        else:
+            raw_type = str(value or "").lower()
+        if raw_type in ("client", "customer", "contact", "external"):
+            return "incoming"
+        if raw_type in ("user", "manager", "bot", "amo", "amo_bot", "salesbot"):
+            return "outgoing"
+    return "unknown"
+
+
+def _fetch_chat_history_messages(
+    chat_scope_id: str,
+    chat_secret: str,
+    chat_id: str,
+    lead_id: str,
+    max_messages: int = 250,
+) -> list[Message]:
+    path = (
+        "/v2/origin/custom/"
+        + urllib.parse.quote(chat_scope_id, safe="")
+        + "/chats/"
+        + urllib.parse.quote(chat_id, safe="")
+        + "/history"
+    )
+    messages: list[Message] = []
+    offset = 0
+    limit = 50
+    while len(messages) < max_messages:
+        raw = _chat_api_request(path, chat_secret, query={"offset": offset, "limit": limit}).decode("utf-8").strip()
+        if not raw:
+            break
+        payload = json.loads(raw)
+        items = _chat_history_items(payload)
+        if not items:
+            break
+        for item in items:
+            text = _chat_history_text(item)
+            if not text:
+                continue
+            messages.append(Message(
+                lead_id=lead_id,
+                text=text,
+                created_at=parse_timestamp(first_present(item, ("created_at", "timestamp", "msec_timestamp"))),
+                direction=_chat_history_direction(item),
+                raw=item,
+            ))
+            if len(messages) >= max_messages:
+                break
+        if len(items) < limit:
+            break
+        offset += len(items)
+    return messages
+
+
 def fetch_talks_messages(
     subdomain: str,
     token: str,
     known_lead_ids: set[str] | None = None,
     contact_lead_map: dict[str, str] | None = None,
     max_talks: int = 5000,
+    chat_scope_id: str | None = None,
+    chat_secret: str | None = None,
 ) -> list[Message]:
     """Fetch WhatsApp messages from Kommo's native inbox (Talks API).
 
@@ -1262,82 +1409,47 @@ def fetch_talks_messages(
     print(f"Talks total buscados: {len(talks)}", file=sys.stderr)
 
     # Resolve each talk to a lead_id, handling both entity_type values.
-    talk_to_lead: list[tuple[str, str]] = []  # [(talk_id, lead_id)]
+    talk_to_lead: list[tuple[str, str, str]] = []  # [(talk_id, lead_id, chat_id)]
     for t in talks:
         talk_id = str(t.get("talk_id") or t.get("id") or "").strip()
+        chat_id = str(t.get("chat_id") or t.get("conversation_id") or "").strip()
         entity_id = str(t.get("entity_id") or "").strip()
         entity_type = str(t.get("entity_type") or "").lower()
         if not talk_id or not entity_id:
             continue
         if entity_type in ("leads", "lead", ""):
             if known_lead_ids is None or entity_id in known_lead_ids:
-                talk_to_lead.append((talk_id, entity_id))
+                talk_to_lead.append((talk_id, entity_id, chat_id))
         elif entity_type in ("contacts", "contact"):
             lead_id = (contact_lead_map or {}).get(entity_id)
             if lead_id and (known_lead_ids is None or lead_id in known_lead_ids):
-                talk_to_lead.append((talk_id, lead_id))
+                talk_to_lead.append((talk_id, lead_id, chat_id))
 
-    print(f"Talks encontrados: {len(talk_to_lead)} conversas para buscar mensagens", file=sys.stderr)
+    print(f"Talks encontrados: {len(talk_to_lead)} conversas com lead conhecido", file=sys.stderr)
 
-    # Probe the first talk's messages to confirm endpoint structure.
-    if talk_to_lead:
-        probe_id = talk_to_lead[0][0]
-        try:
-            probe_raw = _api_request(base_url + "talks/" + probe_id + "/messages?limit=5", token).decode("utf-8").strip()
-            probe = json.loads(probe_raw) if probe_raw else {}
+    chat_scope_id = (chat_scope_id if chat_scope_id is not None else os.getenv("KOMMO_CHAT_SCOPE_ID", "")).strip()
+    chat_secret = (chat_secret if chat_secret is not None else os.getenv("KOMMO_CHAT_SECRET", "")).strip()
+    if not chat_scope_id or not chat_secret:
+        if talk_to_lead:
             print(
-                f"DEBUG talk/{probe_id}/messages: keys={list(probe.keys())}, "
-                f"_embedded={list(probe.get('_embedded', {}).keys())}",
+                "Aviso: histórico de mensagens dos Talks exige KOMMO_CHAT_SCOPE_ID "
+                "e KOMMO_CHAT_SECRET da Chats API; pulando mensagens de Talks.",
                 file=sys.stderr,
             )
-        except (RuntimeError, json.JSONDecodeError) as exc:
-            print(f"DEBUG talk/{probe_id}/messages error: {exc}", file=sys.stderr)
+        return []
 
     messages: list[Message] = []
-    for talk_id, lead_id in talk_to_lead:
-        try:
-            raw = _api_request(base_url + "talks/" + talk_id + "/messages?limit=250", token).decode("utf-8").strip()
-        except RuntimeError:
-            continue
-        if not raw:
+    missing_chat_ids = 0
+    for talk_id, lead_id, chat_id in talk_to_lead:
+        if not chat_id:
+            missing_chat_ids += 1
             continue
         try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-
-        embedded = payload.get("_embedded", {}) if isinstance(payload, dict) else {}
-        msg_list = embedded.get("messages", []) if isinstance(embedded, dict) else []
-
-        for msg in msg_list:
-            if not isinstance(msg, dict):
-                continue
-            text = normalize_text(msg.get("text") or msg.get("content") or "")
-            if not text:
-                continue
-            created_at = parse_timestamp(msg.get("created_at") or msg.get("timestamp"))
-
-            from_field = msg.get("from", {})
-            if isinstance(from_field, dict):
-                from_type = str(from_field.get("type", "")).lower()
-            else:
-                from_type = str(from_field or "").lower()
-
-            if from_type in ("client", "customer", "contact"):
-                direction = "incoming"
-            elif from_type in ("user", "bot", "amo_bot", "manager", "amo", "salesbot"):
-                direction = "outgoing"
-            else:
-                direction = "unknown"
-
-            messages.append(Message(
-                lead_id=lead_id,
-                text=text,
-                created_at=created_at,
-                direction=direction,
-                raw=msg,
-            ))
-
+            messages.extend(_fetch_chat_history_messages(chat_scope_id, chat_secret, chat_id, lead_id))
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            print(f"Aviso: erro ao buscar histórico do talk {talk_id}: {exc}", file=sys.stderr)
+    if missing_chat_ids:
+        print(f"Aviso: {missing_chat_ids} talks sem chat_id para histórico da Chats API", file=sys.stderr)
     return messages
 
 
@@ -1506,8 +1618,40 @@ def run_probe(subdomain: str, token: str, lead_id: str) -> int:
         for t in (talks_any.get("_embedded", {}) or {}).get("talks", []) or []:
             if isinstance(t, dict) and (t.get("talk_id") or t.get("id")):
                 tid = str(t.get("talk_id") or t["id"])
-                show(f"GET /api/v4/talks/{tid}/messages",
-                     _probe_get(subdomain, token, f"talks/{tid}/messages?limit=10"))
+                chat_id = str(t.get("chat_id") or t.get("conversation_id") or "").strip()
+                show(f"GET /api/v4/talks/{tid}",
+                     _probe_get(subdomain, token, f"talks/{tid}"))
+                if chat_id:
+                    chat_scope_id = os.getenv("KOMMO_CHAT_SCOPE_ID", "").strip()
+                    chat_secret = os.getenv("KOMMO_CHAT_SECRET", "").strip()
+                    if chat_scope_id and chat_secret:
+                        history_path = (
+                            "/v2/origin/custom/"
+                            + urllib.parse.quote(chat_scope_id, safe="")
+                            + "/chats/"
+                            + urllib.parse.quote(chat_id, safe="")
+                            + "/history"
+                        )
+                        try:
+                            raw = _chat_api_request(
+                                history_path,
+                                chat_secret,
+                                query={"offset": 0, "limit": 10},
+                            ).decode("utf-8", errors="replace").strip()
+                            show(
+                                "GET https://amojo.kommo.com" + history_path + "?offset=0&limit=10",
+                                json.loads(raw) if raw else {"__empty_body__": True},
+                            )
+                        except (RuntimeError, json.JSONDecodeError) as exc:
+                            show("Chats API history error", {"__error__": str(exc)})
+                    else:
+                        show(
+                            "Chats API history skipped",
+                            {
+                                "chat_id": chat_id,
+                                "required_secrets": ["KOMMO_CHAT_SCOPE_ID", "KOMMO_CHAT_SECRET"],
+                            },
+                        )
                 break
 
     show("GET /api/v4/account?with=amojo_id (verifica acesso a chats)",
