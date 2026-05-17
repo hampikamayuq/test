@@ -1694,6 +1694,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Busca leads e notas pela API usando KOMMO_SUBDOMAIN e KOMMO_ACCESS_TOKEN.",
     )
+    source.add_argument(
+        "--from-report",
+        metavar="REPORT_JSON",
+        help="Lê um relatório JSON gerado anteriormente e re-renderiza no formato "
+             "especificado sem chamar a API novamente.",
+    )
     parser.add_argument("--messages-file", help="Arquivo JSON/CSV com mensagens ou notas. Obrigatório com --leads-file.")
     parser.add_argument("--output", default="kommo_analysis.md", help="Caminho do relatório de saída.")
     parser.add_argument(
@@ -1732,12 +1738,6 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LEAD_ID",
         help="Modo diagnóstico: consulta vários endpoints da API para 1 lead e "
              "imprime o JSON cru. Requer --from-api. Não gera relatório.",
-    )
-    parser.add_argument(
-        "--from-report",
-        metavar="REPORT_JSON",
-        help="Lê um relatório JSON gerado anteriormente e re-renderiza no formato "
-             "especificado sem chamar a API novamente.",
     )
     return parser
 
