@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "wordpress-clinicaqara": {
+      "type": "http",
+      "url": "https://clinicaqara.com.br/wp-json/wp/v2/wpmcp/streamable",
+      "headers": {
+        "Authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2NsaW5pY2FxYXJhLmNvbS5iciIsImlhdCI6MTc4MDMwODcxNywiZXhwIjoxNzgwMzk1MTE3LCJ1c2VyX2lkIjo0LCJqdGkiOiJzeUpMQnBuUXhnOE5nSjVERWRnYlgyR2JSZXkxWUU0ciJ9.70epf-NFeIEncA9Z7OePdwGIqTq0CJi1E5rhZ-QH_bw"
+      }
+    }
+  }
+}
